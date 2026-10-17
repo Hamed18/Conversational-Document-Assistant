@@ -1,0 +1,96 @@
+services:
+  # 1. Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    networks:
+      - rag_network
+
+  # 2. Inngest Server & Observability Dashboard
+  inngest:
+    image: inngest/inngest:latest
+    container_name: rag_inngest
+    restart: unless-stopped
+    command: inngest dev -u http://api:8000/api/inngest --host 0.0.0.0
+    ports:
+      - "8288:8288"
+    networks:
+      - rag_network
+
+  # 3. FastAPI Inngest Execution Worker
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_api
+    restart: unless-stopped
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}
+      - OPENAI_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=docs
+      - INNGEST_BASE_URL=http://inngest:8288
+      - INNGEST_DEV=1
+    volumes:
+      - shared_uploads:/app/uploads
+    depends_on:
+      - qdrant
+      - inngest
+    networks:
+      - rag_network
+
+  # 4. Streamlit Frontend Chat Interface
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rag_frontend
+    restart: unless-stopped
+    environment:
+      - INNGEST_API_BASE=http://inngest:8288/v1
+      - INNGEST_BASE_URL=http://inngest:8288
+      - INNGEST_DEV=1
+    volumes:
+      - shared_uploads:/app/uploads
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+      - inngest
+    networks:
+      - rag_network
+
+  # 5. Reverse Proxy with Automated SSL / TLS
+  caddy:
+    image: caddy:2-alpine
+    container_name: rag_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - inngest
+    networks:
+      - rag_network
+
+volumes:
+  shared_uploads:
+  caddy_data:
+  caddy_config:
+
+networks:
+  rag_network:
+    driver: bridge

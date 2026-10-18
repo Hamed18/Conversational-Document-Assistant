@@ -31,6 +31,106 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
+// -----------------------------------------------------------------------------
+// Citation Helpers for Visual Pills
+// -----------------------------------------------------------------------------
+function parseCitation(rawText) {
+  let clean = (rawText || '').replace(/^\[|\]$/g, '').trim();
+  clean = clean.replace(/^Source:\s*/i, '');
+
+  let filename = '';
+  let page = '';
+  let section = '';
+
+  const bulletDelimiter = clean.includes(' • ') ? ' • ' : clean.includes(' | ') ? ' | ' : null;
+
+  if (bulletDelimiter) {
+    const parts = clean.split(bulletDelimiter).map((s) => s.trim());
+    filename = parts[0] || '';
+    parts.slice(1).forEach((part) => {
+      if (/^page/i.test(part)) {
+        page = part.replace(/^page[:\s]*/i, '').trim();
+      } else if (/^section/i.test(part)) {
+        section = part.replace(/^section[:\s]*/i, '').trim();
+      } else {
+        section = part.trim();
+      }
+    });
+  } else {
+    // Regex extract Page and Section
+    const pageMatch = clean.match(/(?:,\s*|\s+|^)Page:?\s*(\d+)/i);
+    const sectionMatch = clean.match(/(?:,\s*|\s+|^)Section:?\s*([^,\]]+)/i);
+
+    if (pageMatch) page = pageMatch[1].trim();
+    if (sectionMatch) section = sectionMatch[1].trim();
+
+    // Filename is everything before Page: or Section: or first comma
+    let fnPart = clean;
+    const cutIdx = clean.search(/(?:,\s*|\s+)Page:?|(?:,\s*|\s+)Section:?/i);
+    if (cutIdx !== -1) {
+      fnPart = clean.substring(0, cutIdx).trim();
+    } else {
+      const commaIdx = clean.indexOf(',');
+      if (commaIdx !== -1) fnPart = clean.substring(0, commaIdx).trim();
+    }
+    filename = fnPart;
+  }
+
+  // Remove trailing commas, quotes, and isolate filename
+  filename = (filename || '').replace(/[,;]+$/, '').replace(/^['"]|['"]$/g, '').trim();
+  const displayName = filename.split(/[\\/]/).pop();
+  return { filename: displayName, page, section, raw: clean };
+}
+
+function renderWithCitations(children) {
+  if (Array.isArray(children)) {
+    return children.map((child, idx) => (
+      <React.Fragment key={idx}>{renderWithCitations(child)}</React.Fragment>
+    ));
+  }
+  if (typeof children !== 'string') return children;
+
+  // Match [Source: ...], [... Page ...], [... Section ...]
+  const regex = /\[(Source:[^\]]+|[^\]]*(?:Page|Section|\.pdf)[^\]]*)\]/gi;
+  if (!regex.test(children)) return children;
+
+  const parts = [];
+  let lastIdx = 0;
+  let match;
+  regex.lastIndex = 0;
+  while ((match = regex.exec(children)) !== null) {
+    if (match.index > lastIdx) {
+      parts.push(children.substring(lastIdx, match.index));
+    }
+    const { filename, page, section, raw } = parseCitation(match[1]);
+    parts.push(
+      <span
+        key={match.index}
+        className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 my-0.5 rounded-lg bg-blue-950/80 border border-blue-500/40 text-blue-200 font-mono text-[11px] align-baseline shadow-sm hover:border-blue-400 hover:bg-blue-900/60 transition-colors select-none cursor-pointer"
+        title={`Verified Citation: ${raw}`}
+      >
+        <FileText size={11} className="text-blue-400 flex-shrink-0" />
+        <span className="font-semibold text-slate-100 truncate max-w-[150px]">{filename}</span>
+        {page && (
+          <span className="px-1.5 py-0.2 rounded bg-blue-600/30 text-blue-300 border border-blue-400/30 text-[10px] font-semibold">
+            P.{page}
+          </span>
+        )}
+        {section && section !== `Page ${page}` && (
+          <span className="px-1.5 py-0.2 rounded bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 text-[10px] truncate max-w-[130px]">
+            {section}
+          </span>
+        )}
+      </span>
+    );
+    lastIdx = regex.lastIndex;
+  }
+  if (lastIdx < children.length) {
+    parts.push(children.substring(lastIdx));
+  }
+  return parts;
+}
+
 export default function App() {
   // ---------------------------------------------------------------------------
   // State Management
@@ -40,7 +140,6 @@ export default function App() {
       const saved = localStorage.getItem('rag_chat_sessions');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Deduplicate any empty duplicate entries
         const cleanSessions = {};
         let emptyCount = 0;
         Object.entries(parsed).forEach(([id, sess]) => {
@@ -150,7 +249,6 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [sessions, activeSessionId, loading]);
 
-  // Handle scroll to toggle the scroll-to-bottom arrow button
   const handleScroll = (e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const isNotAtBottom = scrollHeight - scrollTop - clientHeight > 100;
@@ -204,7 +302,7 @@ export default function App() {
     }
 
     setUploading(true);
-    setUploadMessage('Processing & analyzing document...');
+    setUploadMessage('Processing & analyzing document with page citations...');
 
     const formData = new FormData();
     formData.append('file', file);
@@ -220,7 +318,7 @@ export default function App() {
         throw new Error(err.detail || 'Upload failed');
       }
 
-      setUploadMessage('Document indexed and ready for queries!');
+      setUploadMessage('Document indexed with exact page and section citations!');
       fetchDocuments();
       setTimeout(() => setUploadMessage(null), 4000);
     } catch (err) {
@@ -318,7 +416,6 @@ export default function App() {
       messages: [],
     };
 
-    // Update title from the first question
     const updatedTitle =
       currentSession.messages.length === 0
         ? textToSend.slice(0, 32) + (textToSend.length > 32 ? '...' : '')
@@ -421,7 +518,6 @@ export default function App() {
 
   const activeSession = sessions[activeSessionId] || Object.values(sessions)[0] || { messages: [] };
 
-  // Only previous conversations with messages are displayed in the Previous Conversation list
   const previousSessions = Object.values(sessions)
     .filter((s) => s.messages && s.messages.length > 0)
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -897,7 +993,7 @@ export default function App() {
                     )}
 
                     <div className={`max-w-[85%] sm:max-w-[80%] ${isUser ? 'items-end' : 'items-start'}`}>
-                      {/* Message Bubble */}
+                      {/* Message Bubble with Rendered Visual Citation Pills */}
                       <div
                         className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                           isUser
@@ -906,7 +1002,19 @@ export default function App() {
                         }`}
                       >
                         <div className="prose prose-invert prose-sm max-w-none break-words">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          <ReactMarkdown
+                            components={{
+                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{renderWithCitations(children)}</p>,
+                              li: ({ children }) => <li className="leading-relaxed mb-1">{renderWithCitations(children)}</li>,
+                              blockquote: ({ children }) => <blockquote className="border-l-4 border-blue-500/50 pl-3 italic my-2">{renderWithCitations(children)}</blockquote>,
+                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 text-slate-100">{renderWithCitations(children)}</h1>,
+                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 text-slate-100">{renderWithCitations(children)}</h2>,
+                              h3: ({ children }) => <h3 className="text-base font-semibold mb-1 text-slate-100">{renderWithCitations(children)}</h3>,
+                              td: ({ children }) => <td className="p-2 border border-slate-700">{renderWithCitations(children)}</td>,
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
                         </div>
                       </div>
 
@@ -932,7 +1040,7 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Sources Accordion with Page Numbers & Sections */}
+                          {/* Sources Accordion with Visual Citation Cards */}
                           {msg.sources && msg.sources.length > 0 && (
                             <div className="mt-1">
                               <button
@@ -950,20 +1058,28 @@ export default function App() {
                               </button>
 
                               {openCitations[index] && (
-                                <div className="mt-1.5 pl-3 border-l-2 border-blue-500/40 space-y-1.5">
+                                <div className="mt-2 space-y-1.5 pl-1">
                                   {msg.sources.map((src, sIdx) => {
-                                    const parts = typeof src === 'string' ? src.split(' • ') : [String(src)];
+                                    const { filename, page, section } = parseCitation(src);
                                     return (
-                                      <div key={sIdx} className="text-[11px] text-slate-300 flex flex-wrap items-center gap-1.5">
-                                        <span className="font-mono text-slate-200">{parts[0]}</span>
-                                        {parts.slice(1).map((part, pIdx) => (
-                                          <span
-                                            key={pIdx}
-                                            className="px-1.5 py-0.5 rounded bg-blue-950/60 border border-blue-500/30 text-blue-300 text-[10px] font-mono"
-                                          >
-                                            {part}
+                                      <div
+                                        key={sIdx}
+                                        className="flex flex-wrap items-center gap-2 p-2 rounded-xl bg-slate-800/90 border border-slate-700/70 text-xs shadow-sm hover:border-blue-500/40 transition-colors"
+                                      >
+                                        <div className="flex items-center gap-1.5 font-medium text-slate-100">
+                                          <FileText size={13} className="text-blue-400 flex-shrink-0" />
+                                          <span className="font-mono text-xs">{filename}</span>
+                                        </div>
+                                        {page && (
+                                          <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-mono font-semibold">
+                                            Page {page}
                                           </span>
-                                        ))}
+                                        )}
+                                        {section && section !== `Page ${page}` && (
+                                          <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono">
+                                            Section: {section}
+                                          </span>
+                                        )}
                                       </div>
                                     );
                                   })}

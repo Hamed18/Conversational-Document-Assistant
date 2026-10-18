@@ -21,12 +21,12 @@ splitter = SentenceSplitter(chunk_size=1000, chunk_overlap=200)
 
 
 def extract_section_heading(text: str, default_val: str = "") -> str:
-    """Detects section or subsection headings from chunk text."""
-    lines = text.split("\n")
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
+    """Detects section, subsection, or topic headings from text."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if not lines:
+        return default_val
+
+    for line in lines:
         # Markdown heading style (# Title)
         if line.startswith("#"):
             cleaned = line.lstrip("#").strip()
@@ -35,9 +35,14 @@ def extract_section_heading(text: str, default_val: str = "") -> str:
         # Numbered headings (e.g. 1. Introduction, 2.3 System Architecture)
         if re.match(r"^(?:(?:Section|Chapter|\d+(?:\.\d+)*)\s+[A-Za-z0-9][A-Za-z0-9\s:,\-\?]+)$", line, re.IGNORECASE) and len(line) < 80:
             return line
-        # All-caps or title-case short headers (e.g. ABSTRACT, EXECUTIVE SUMMARY)
-        if re.match(r"^[A-Z][A-Za-z0-9\s:,\-]{2,50}:?$", line) and len(line.split()) <= 6:
+        # Title case / All-caps short headers
+        if re.match(r"^[A-Z][A-Za-z0-9\s:,\-]{2,50}:?$", line) and len(line.split()) <= 7:
             return line
+
+    # Fallback to the first line if it looks like a slide or section header (< 60 chars and not a sentence)
+    if lines and len(lines[0]) <= 60 and not lines[0].endswith("."):
+        return lines[0]
+
     return default_val
 
 
@@ -66,7 +71,7 @@ def load_and_chunk_pdf_with_metadata(path: str) -> list[dict]:
             chunks_with_meta.append({
                 "text": chunk,
                 "page": page_num,
-                "section": chunk_heading or f"Page {page_num}",
+                "section": chunk_heading or current_section or f"Page {page_num}",
             })
 
     return chunks_with_meta

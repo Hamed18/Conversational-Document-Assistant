@@ -147,11 +147,19 @@ def execute_query_cascade(question: str, top_k: int = 5, requested_model: str | 
     found = store.search(query_vec, top_k)
 
     context_block = "\n\n".join(f"- {c}" for c in found["contexts"])
+    system_prompt = (
+        "You are AskFiles AI, a precise, intelligent, and grounded document assistant.\n"
+        "MANDATORY CITATION REQUIREMENT:\n"
+        "1. After EVERY piece of information, claim, finding, or sentence you state, you MUST append an inline citation in square brackets [ ... ] citing the exact source file, page number, and section.\n"
+        "2. Format: [Source: <filename>, Page: <page_number>, Section: <section_title>]\n"
+        "   If section is unavailable or same as page, format as: [Source: <filename>, Page: <page_number>]\n"
+        "3. Place the bracketed citation immediately following the fact or sentence (e.g. 'Random Forests combine multiple decision trees to reduce variance [Source: Ensemble.pdf, Page: 14, Section: Bagging & Forests].')\n"
+        "4. Rely ONLY on the provided context. If the context does not answer the question, state that clearly."
+    )
     user_content = (
-        "Use the following context to answer the question.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}\n"
-        "Answer concisely using the context above."
+        f"Context with document, page, and section provenance:\n\n{context_block}\n\n"
+        f"User Question: {question}\n\n"
+        "Provide a grounded, comprehensive answer. Add an inline citation in square brackets [Source: <filename>, Page: <page>, Section: <section>] after every sentence or statement of fact."
     )
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -174,7 +182,7 @@ def execute_query_cascade(question: str, top_k: int = 5, requested_model: str | 
             res = client.chat.completions.create(
                 model=model_id,
                 messages=[
-                    {"role": "system", "content": "You answer questions using only the provided context."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
                 max_tokens=1024,

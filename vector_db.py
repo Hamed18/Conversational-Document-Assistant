@@ -24,6 +24,14 @@ class QdrantStorage:
                 collection_name=self.collection,
                 vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
             )
+        try:
+            self.client.create_payload_index(
+                collection_name=self.collection,
+                field_name="source",
+                field_schema="keyword",
+            )
+        except Exception:
+            pass
 
     def upsert(self, ids, vectors, payloads):
         points = [

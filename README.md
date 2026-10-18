@@ -1,8 +1,36 @@
-# Production-Ready RAG AI Document Reader Application
+# AskFiles - Intelligent Conversational Document Assistant
 
-A resilient, production-grade Retrieval-Augmented Generation (RAG) system built in Python for ingesting PDF documents and performing grounded Q&A with citations, distributed multi-tier model failovers, and end-to-end workflow observability.
+A resilient, production-grade Retrieval-Augmented Generation (RAG) system built with Python, FastAPI, and React for ingesting PDF documents and performing grounded conversational Q&A with exact page & section citations, distributed multi-tier model failovers, and end-to-end workflow observability.
 
-The application incorporates durability, distributed retries, rate limiting, and observability using **Inngest**, **Qdrant (Native & Docker)**, **LlamaIndex**, **OpenRouter Multi-Model Cascade (Gemini Flash, Qwen 2.5, Nemotron 120B)**, **FastAPI**, and **Streamlit**.
+---
+
+## 🌐 Live Production Deployments
+
+| Component | Platform | Live URL / Endpoint |
+| :--- | :--- | :--- |
+| **AskFiles Web Application** | **Vercel** (Global Edge CDN) | [https://askfiles.vercel.app](https://askfiles.vercel.app/) |
+| **Backend REST API** | **Render** (Docker Web Service) | [https://conversational-document-assistant.onrender.com](https://conversational-document-assistant.onrender.com) |
+| **Backend Health Check** | **Render** (Docker Web Service) | [https://conversational-document-assistant.onrender.com/api/health](https://conversational-document-assistant.onrender.com/api/health) |
+| **Inngest Webhook Endpoint** | **Render** (Docker Web Service) | [https://conversational-document-assistant.onrender.com/api/inngest](https://conversational-document-assistant.onrender.com/api/inngest) |
+| **Vector Database Cluster** | **Qdrant Cloud** (AWS sa-east-1) | `https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io` |
+| **Workflow Observability** | **Inngest Cloud** | [https://app.inngest.com](https://app.inngest.com) |
+| **Source Code Repository** | **GitHub** | [https://github.com/Hamed18/Conversational-Document-Assistant](https://github.com/Hamed18/Conversational-Document-Assistant.git) |
+| **Lead Developer** | **LinkedIn** | [Mohammod Hamed Hasan](https://www.linkedin.com/in/devhamed/) |
+
+---
+
+## ✨ Key Features
+
+- **Grounded Inline Citations**: Extracts exact PDF page numbers (`page_label`) and detects section/topic headings via regex. Responses enforce inline citation brackets `[Source: <file>, Page: <page>, Section: <section>]` converted into interactive visual pill badges.
+- **Modern React Chatbot UI**: Built with React 18, Vite, Tailwind CSS, and Lucide Icons. Features pinned auto-resizing chatbox, drag-and-drop file uploaders, document deletion, collapsible conversation history, and scroll-to-bottom controls.
+- **Enterprise Use-Case Integrations**: Documented integration architectures for ERP, CRM, POS, and internal enterprise document search systems.
+- **Distributed LLM Cascade**: Cascading fallback chain prioritizing latency and reasoning quality:
+  1. **Google Gemini 2.5 Flash** (Primary - sub-2s latency, premier fidelity)
+  2. **Qwen 2.5 72B Instruct** (Tier 2 - high-capacity reasoning fallback)
+  3. **NVIDIA Nemotron 120B** (Tier 3 - zero-cost safety net)
+- **Production-Grade DevOps**: Multi-stage lightweight `Dockerfile` dynamically binding to `$PORT`, automated CI/CD on Render and Vercel, single-page application routing (`vercel.json`), and payload keyword indexing in Qdrant.
+- **End-to-End Observability**: Traces document ingestion and query flows with Inngest step DAGs, live metrics, and automatic retry policies.
+- **100% Free Tier Ecosystem**: Built entirely across free tiers of modern cloud services without incurring recurring infrastructure costs.
 
 ---
 
@@ -10,16 +38,15 @@ The application incorporates durability, distributed retries, rate limiting, and
 
 | Component | Port | Local URL | Role |
 | :--- | :--- | :--- | :--- |
-| 💬 **Streamlit Chatbot** | `8501` | [http://localhost:8501](http://localhost:8501) | PDF uploader, conversational QA, model selector, latency badges |
+| 💬 **AskFiles React Frontend** | `3000` | [http://localhost:3000](http://localhost:3000) | Modern conversational document assistant UI (Vite + Tailwind) |
+| ⚙️ **FastAPI Backend Worker** | `8000` | [http://localhost:8000/docs](http://localhost:8000/docs) | REST API, vector retrieval, and Inngest function handlers |
 | 📊 **Inngest Observability** | `8288` | [http://localhost:8288](http://localhost:8288) | Real-time step tracing, retry policies, and execution graphs |
-| ⚙️ **FastAPI Backend Worker** | `8000` | [http://localhost:8000/docs](http://localhost:8000/docs) | Serves Inngest function endpoints & handles background workflows |
-| 🗄️ **Qdrant Vector Database** | `6333` | [http://localhost:6333/dashboard](http://localhost:6333/dashboard) | High-performance vector database (3072-dim Cosine similarity) |
+| 🗄️ **Qdrant Vector Database** | `6333` | [http://localhost:6333/dashboard](http://localhost:6333/dashboard) | High-performance vector database (or Qdrant Cloud cluster) |
+| 💬 *(Legacy)* **Streamlit Chatbot** | `8501` | [http://localhost:8501](http://localhost:8501) | Legacy Streamlit UI interface |
 
 ---
 
-## 🧠 Distributed Model Fallback Architecture
-
-To maximize response speed and ensure 100% uptime, queries utilize an intelligent 3-tier distributed model cascade prioritized by **Latency** and **Reasoning Quality**:
+## 🧠 Distributed Model Fallback Cascade
 
 ```mermaid
 flowchart TD
@@ -31,187 +58,55 @@ flowchart TD
     Tier3 -->|Success| Answer
 ```
 
-1. **Tier 1 (Primary): `google/gemini-2.5-flash`**
-   - High instruction synthesis, massive context fidelity, sub-2-second latency.
-2. **Tier 2 (Fallback 1): `qwen/qwen-2.5-72b-instruct`**
-   - Leading open-weights reasoning model, high factual grounding.
-3. **Tier 3 (Fallback 2): `nvidia/nemotron-3-super-120b-a12b:free`**
-   - 120B parameter dense model providing a zero-cost fallback safety net.
-
-*Every tier attempt is tracked as an individual step in the Inngest Dev Server dashboard.*
-
 ---
 
 ## ⚡ Quick Start (Run Locally)
 
-We provide one-command automation scripts to launch all 4 services concurrently:
+For a complete walkthrough on cloning and running the application from scratch, see [`SETUP.md`](SETUP.md).
 
-### Using PowerShell:
+### Using Automation Scripts (Windows):
 ```powershell
+# PowerShell:
 .\run_local.ps1
-```
 
-### Using Windows Batch / Double-Click:
-```cmd
+# Command Prompt / Double-Click:
 run_local.bat
 ```
 
----
+### Manual Commands:
+```bash
+# 1. Clone repository
+git clone https://github.com/Hamed18/Conversational-Document-Assistant.git
+cd Conversational-Document-Assistant
 
-## 📋 Manual Step-by-Step Commands
+# 2. Configure environment
+cp .env.example .env
 
-To run each service individually in dedicated terminal windows:
+# 3. Set up Python backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
 
-### Step 1: Start Qdrant Vector Database
-**Option A: Native Windows Binary (Recommended - No Docker Required):**
-```powershell
-.\qdrant_server\qdrant.exe
-```
-
-**Option B: Docker Compose:**
-```powershell
-docker compose up -d
-```
-> Verify Qdrant is running: `curl.exe http://127.0.0.1:6333`
-
----
-
-### Step 2: Start FastAPI Backend
-```powershell
-.\.venv\Scripts\uvicorn.exe main:app --reload --port 8000
-```
-> Serves Inngest function handlers at `http://127.0.0.1:8000/api/inngest`.
-
----
-
-### Step 3: Start Inngest Observability Dev Server
-```powershell
-npx inngest-cli dev -u http://127.0.0.1:8000/api/inngest --no-discovery
-```
-> Open **[http://localhost:8288](http://localhost:8288)** to view execution trees, step durations, and retries.
-
----
-
-### Step 4: Start Streamlit Frontend
-```powershell
-.\.venv\Scripts\streamlit.exe run streamlit_app.py --server.port 8501
-```
-> Open **[http://localhost:8501](http://localhost:8501)** to chat with your PDFs.
-
----
-
-## 🚀 Modern React Frontend & Cloud Architecture
-
-In addition to the local Streamlit UI, the project includes a production-grade **React 18 Single Page Application (SPA)** with:
-- **Pinned Bottom Chat Bar**: Auto-resizing textarea with keyboard shortcuts (`Enter` to submit, `Shift+Enter` for newline).
-- **Left Sidebar**: Multi-session persistent chat history (stored locally), PDF Drag & Drop uploader, cascade model selector (`Gemini 2.5 Flash ➜ Qwen 2.5 72B ➜ Nemotron 120B`), and real-time cloud health status.
-- **Rich Chat Stream**: Markdown formatting, syntax highlighting, model response badges with latency timing, and collapsible citation cards (`📚 Sources & Citations`).
-
----
-
-## ☁️ Permanent Free Cloud Deployment Guide
-
-This project is architected for zero-cost, permanent cloud hosting without ephemeral tunnels:
-
-```
-┌────────────────────────────────┐         ┌────────────────────────────────┐
-│   Vercel Free Hosting          │         │   Render.com Free Web Service   │
-│   React 18 + Vite Frontend     │ ──────> │   Dockerized FastAPI Backend    │
-│   (Permanent HTTPS URL)        │  HTTPS  │   (Auto-scaling / Health Probe) │
-└────────────────────────────────┘         └───────────────┬────────────────┘
-                                                           │
-                                   ┌───────────────────────┴───────────────────────┐
-                                   ▼                                               ▼
-                    ┌──────────────────────────────┐                ┌──────────────────────────────┐
-                    │     Qdrant Cloud Free        │                │     Inngest Cloud Free       │
-                    │   Managed Vector Cluster     │                │   Distributed Observability  │
-                    │   (4GB Permanent Storage)    │                │   (50k runs/mo Tracing)      │
-                    └──────────────────────────────┘                └──────────────────────────────┘
-```
-
-### 1. Backend Deployment (Render.com)
-1. Sign up / Log in to [Render.com](https://render.com) (Free Tier).
-2. Click **New +** ➜ **Web Service**.
-3. Connect your GitHub repository: `Hamed18/Conversational-Document-Assistant`.
-4. Choose **Docker** as the Environment.
-5. In **Environment Variables**, add:
-   - `OPENROUTER_API_KEY`: Your OpenRouter API key.
-   - `OPENROUTER_BASE_URL`: `https://openrouter.ai/api/v1`
-   - `QDRANT_URL`: `https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io`
-   - `QDRANT_API_KEY`: Your Qdrant Cloud API key.
-   - `QDRANT_COLLECTION`: `docs`
-   - `INNGEST_SIGNING_KEY`: Your Inngest Cloud Signing Key (`signkey-prod-...`).
-   - `INNGEST_EVENT_KEY`: Your Inngest Cloud Event Key.
-   - `MODEL_FALLBACK_CHAIN`: `google/gemini-2.5-flash,qwen/qwen-2.5-72b-instruct,nvidia/nemotron-3-super-120b-a12b:free`
-6. Click **Deploy Web Service**. Render will build the Docker container and provide a permanent HTTPS URL (e.g. `https://your-rag-backend.onrender.com`).
-
----
-
-### 2. Connect Inngest Cloud Webhook
-1. Open your [Inngest Cloud Dashboard](https://app.inngest.com).
-2. Go to **Apps** ➜ **Add App / Webhook**.
-3. Set the Webhook URL to: `https://your-rag-backend.onrender.com/api/inngest`.
-4. Inngest Cloud will automatically synchronize your functions (`rag/pdf.ingest`, `rag/chat.query`) and begin recording live step-by-step traces.
-
----
-
-### 3. Frontend Deployment (Vercel)
-1. Sign up / Log in to [Vercel](https://vercel.com) (Free Tier).
-2. Click **Add New...** ➜ **Project**.
-3. Import `Hamed18/Conversational-Document-Assistant`.
-4. In **Project Settings**:
-   - **Root Directory**: Select `frontend` (Click Edit ➜ select `frontend`).
-   - **Framework Preset**: `Vite` (automatically detected).
-5. In **Environment Variables**, add:
-   - `VITE_API_BASE_URL`: `https://your-rag-backend.onrender.com` (your Render backend URL).
-6. Click **Deploy**. Vercel will build and provide your permanent public URL (e.g. `https://your-rag-app.vercel.app`).
-
----
-
-## 💻 Local Development with React Frontend
-
-Run both backend and frontend locally:
-
-### Terminal 1: FastAPI Backend
-```powershell
-.\.venv\Scripts\uvicorn.exe main:app --reload --port 8000
-```
-
-### Terminal 2: React Dev Server
-```powershell
+# 4. Set up React frontend (in separate terminal)
 cd frontend
 npm install
 npm run dev
 ```
-> Open **[http://localhost:3000](http://localhost:3000)** in your browser. API requests are automatically proxied to `http://localhost:8000`.
 
 ---
 
-## ⚙️ Environment Configuration (`.env`)
+## 📚 Complete Documentation Index
 
-```env
-# OpenRouter API Key
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-
-# Distributed Model Fallback Chain
-MODEL_PRIMARY=google/gemini-2.5-flash
-MODEL_FALLBACK_1=qwen/qwen-2.5-72b-instruct
-MODEL_FALLBACK_2=nvidia/nemotron-3-super-120b-a12b:free
-MODEL_FALLBACK_CHAIN=google/gemini-2.5-flash,qwen/qwen-2.5-72b-instruct,nvidia/nemotron-3-super-120b-a12b:free
-
-# Qdrant Vector Database (Remote Cloud or Local)
-QDRANT_URL=https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io
-QDRANT_API_KEY=your_qdrant_api_key_here
-QDRANT_COLLECTION=docs
-
-# Inngest Cloud Configuration
-INNGEST_SIGNING_KEY=signkey-prod-your_signing_key_here
-INNGEST_EVENT_KEY=your_inngest_event_key_here
-```
+- **[SETUP.md](SETUP.md)**: Step-by-step local setup guide after cloning or forking.
+- **[docs/DEVOPS_IMPLEMENTATION.md](docs/DEVOPS_IMPLEMENTATION.md)**: Deep dive into Docker containerization, production deployment playbooks, observability, and AWS/Azure hyperscaler comparisons.
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Technical architecture, data flow diagrams, and schema specifications.
+- **[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md)**: Local development, ports, and multi-service orchestration.
 
 ---
 
-## 📖 Additional Documentation
-- System Architecture & Data Flow: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Local Setup & Fallback Testing: [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)
+## 👨‍💻 Author
+
+**Mohammod Hamed Hasan**  
+- **LinkedIn**: [https://www.linkedin.com/in/devhamed/](https://www.linkedin.com/in/devhamed/)  
+- **GitHub**: [@Hamed18](https://github.com/Hamed18)

@@ -10,3 +10,8 @@ wheels/
 .venv
 /uploads
 .env
+chat_history.json
+cloudflared.exe
+qdrant_server/
+qdrant_storage/
+scratch/

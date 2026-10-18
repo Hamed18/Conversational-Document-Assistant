@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 import inngest
 import inngest.fast_api
-from inngest.experimental import ai
+from openai import OpenAI
 from dotenv import load_dotenv
 import uuid
 import os
@@ -53,6 +53,43 @@ async def rag_ingest_pdf(ctx: inngest.Context):
     return ingested.model_dump()
 
 
+def get_fallback_models(requested_model: str | None = None) -> list[tuple[str, str, str]]:
+    """
+    Returns prioritized list of (step_key, model_id, display_name).
+    Prioritized by Latency & Quality:
+    1. Gemini 2.5 Flash: ~3.5-4.5s latency, premier instruction following & context synthesis.
+    2. Qwen 2.5 72B: ~2-3.2s latency, leading open-weights reasoning & factuality.
+    3. Nemotron 120B: ~6s latency, high-capacity 120B dense model with free-tier safeguard.
+    """
+    default_chain = [
+        ("gemini-flash", "google/gemini-2.5-flash", "Google Gemini 2.5 Flash"),
+        ("qwen-72b", "qwen/qwen-2.5-72b-instruct", "Qwen 2.5 72B Instruct"),
+        ("nemotron-120b", "nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA Nemotron 120B"),
+    ]
+    raw = os.getenv("MODEL_FALLBACK_CHAIN", "")
+    if raw.strip():
+        models = [m.strip() for m in raw.split(",") if m.strip()]
+        chain = []
+        name_map = {
+            "google/gemini-2.5-flash": "Google Gemini 2.5 Flash",
+            "qwen/qwen-2.5-72b-instruct": "Qwen 2.5 72B Instruct",
+            "nvidia/nemotron-3-super-120b-a12b:free": "NVIDIA Nemotron 120B",
+        }
+        for m in models:
+            step_key = m.replace("/", "-").replace(":", "-").replace(".", "-")[:20]
+            display_name = name_map.get(m, m)
+            chain.append((step_key, m, display_name))
+    else:
+        chain = default_chain
+
+    if requested_model:
+        chain = [c for c in chain if c[1] == requested_model] + [c for c in chain if c[1] != requested_model]
+        if not any(c[1] == requested_model for c in chain):
+            step_key = requested_model.replace("/", "-").replace(":", "-").replace(".", "-")[:20]
+            chain.insert(0, (step_key, requested_model, requested_model))
+    return chain
+
+
 @inngest_client.create_function(
     fn_id="RAG: Query PDF",
     trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
@@ -66,6 +103,7 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
 
     question = ctx.event.data["question"]
     top_k = int(ctx.event.data.get("top_k", 5))
+    requested_model = ctx.event.data.get("model")
 
     found = await ctx.step.run("embed-and-search", lambda: _search(question, top_k), output_type=RAGSearchResult)
 
@@ -79,30 +117,82 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     openrouter_base_url = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-    model_name = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-
-    adapter = ai.openai.Adapter(
-        auth_key=openrouter_key,
+    client = OpenAI(
         base_url=openrouter_base_url,
-        model=model_name
+        api_key=openrouter_key,
+        timeout=30.0,
     )
 
-    res = await ctx.step.ai.infer(
-        "llm-answer",
-        adapter=adapter,
-        body={
-            "max_tokens": 1024,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": "You answer questions using only the provided context."},
-                {"role": "user", "content": user_content}
-            ]
-        }
-    )
+    models_to_try = get_fallback_models(requested_model)
+    answer = None
+    model_used = None
+    latency_ms = 0
+    fallback_history = []
 
-    msg = res["choices"][0]["message"]
-    answer = (msg.get("content") or msg.get("reasoning") or "").strip()
-    return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
+    for step_key, model_id, display_name in models_to_try:
+        def _invoke_model(m=model_id, name=display_name):
+            import time
+            t0 = time.time()
+            try:
+                res = client.chat.completions.create(
+                    model=m,
+                    messages=[
+                        {"role": "system", "content": "You answer questions using only the provided context."},
+                        {"role": "user", "content": user_content}
+                    ],
+                    max_tokens=1024,
+                    temperature=0.2,
+                )
+                dt = (time.time() - t0) * 1000
+                msg = res.choices[0].message
+                text = (msg.content or getattr(msg, "reasoning", "") or "").strip()
+                if not text:
+                    raise ValueError(f"Model {m} returned empty response")
+                return {
+                    "success": True,
+                    "answer": text,
+                    "model": m,
+                    "model_name": name,
+                    "latency_ms": round(dt, 2),
+                    "error": None
+                }
+            except Exception as e:
+                dt = (time.time() - t0) * 1000
+                logging.getLogger("uvicorn").warning(f"Distributed fallback: Model {m} failed in {dt:.0f}ms: {e}")
+                return {
+                    "success": False,
+                    "answer": "",
+                    "model": m,
+                    "model_name": name,
+                    "latency_ms": round(dt, 2),
+                    "error": str(e)
+                }
+
+        step_res = await ctx.step.run(f"llm-{step_key}", _invoke_model)
+        if step_res.get("success") and step_res.get("answer"):
+            answer = step_res["answer"]
+            model_used = step_res.get("model", model_id)
+            latency_ms = step_res.get("latency_ms", 0)
+            break
+        else:
+            fallback_history.append({
+                "model": step_res.get("model", model_id),
+                "model_name": step_res.get("model_name", display_name),
+                "error": step_res.get("error", "Unknown error"),
+                "latency_ms": step_res.get("latency_ms", 0)
+            })
+
+    if not answer:
+        raise RuntimeError(f"All distributed LLM fallback models failed: {fallback_history}")
+
+    return {
+        "answer": answer,
+        "sources": found.sources,
+        "num_contexts": len(found.contexts),
+        "model_used": model_used,
+        "latency_ms": latency_ms,
+        "fallback_history": fallback_history
+    }
 
 app = FastAPI()
 

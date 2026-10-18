@@ -100,17 +100,90 @@ npx inngest-cli dev -u http://127.0.0.1:8000/api/inngest --no-discovery
 
 ---
 
-## 🌐 Public Sharing via Cloudflare Quick Tunnels (Optional)
+## 🚀 Modern React Frontend & Cloud Architecture
 
-To generate free, secure public HTTPS URLs without opening router ports or providing credentials:
+In addition to the local Streamlit UI, the project includes a production-grade **React 18 Single Page Application (SPA)** with:
+- **Pinned Bottom Chat Bar**: Auto-resizing textarea with keyboard shortcuts (`Enter` to submit, `Shift+Enter` for newline).
+- **Left Sidebar**: Multi-session persistent chat history (stored locally), PDF Drag & Drop uploader, cascade model selector (`Gemini 2.5 Flash ➜ Qwen 2.5 72B ➜ Nemotron 120B`), and real-time cloud health status.
+- **Rich Chat Stream**: Markdown formatting, syntax highlighting, model response badges with latency timing, and collapsible citation cards (`📚 Sources & Citations`).
 
-```powershell
-# Public Chatbot URL
-.\cloudflared.exe tunnel --url http://127.0.0.1:8501 --no-autoupdate
+---
 
-# Public Inngest Dashboard URL
-.\cloudflared.exe tunnel --url http://127.0.0.1:8288 --no-autoupdate
+## ☁️ Permanent Free Cloud Deployment Guide
+
+This project is architected for zero-cost, permanent cloud hosting without ephemeral tunnels:
+
 ```
+┌────────────────────────────────┐         ┌────────────────────────────────┐
+│   Vercel Free Hosting          │         │   Render.com Free Web Service   │
+│   React 18 + Vite Frontend     │ ──────> │   Dockerized FastAPI Backend    │
+│   (Permanent HTTPS URL)        │  HTTPS  │   (Auto-scaling / Health Probe) │
+└────────────────────────────────┘         └───────────────┬────────────────┘
+                                                           │
+                                   ┌───────────────────────┴───────────────────────┐
+                                   ▼                                               ▼
+                    ┌──────────────────────────────┐                ┌──────────────────────────────┐
+                    │     Qdrant Cloud Free        │                │     Inngest Cloud Free       │
+                    │   Managed Vector Cluster     │                │   Distributed Observability  │
+                    │   (4GB Permanent Storage)    │                │   (50k runs/mo Tracing)      │
+                    └──────────────────────────────┘                └──────────────────────────────┘
+```
+
+### 1. Backend Deployment (Render.com)
+1. Sign up / Log in to [Render.com](https://render.com) (Free Tier).
+2. Click **New +** ➜ **Web Service**.
+3. Connect your GitHub repository: `Hamed18/Conversational-Document-Assistant`.
+4. Choose **Docker** as the Environment.
+5. In **Environment Variables**, add:
+   - `OPENROUTER_API_KEY`: Your OpenRouter API key.
+   - `OPENROUTER_BASE_URL`: `https://openrouter.ai/api/v1`
+   - `QDRANT_URL`: `https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io`
+   - `QDRANT_API_KEY`: Your Qdrant Cloud API key.
+   - `QDRANT_COLLECTION`: `docs`
+   - `INNGEST_SIGNING_KEY`: Your Inngest Cloud Signing Key (`signkey-prod-...`).
+   - `INNGEST_EVENT_KEY`: Your Inngest Cloud Event Key.
+   - `MODEL_FALLBACK_CHAIN`: `google/gemini-2.5-flash,qwen/qwen-2.5-72b-instruct,nvidia/nemotron-3-super-120b-a12b:free`
+6. Click **Deploy Web Service**. Render will build the Docker container and provide a permanent HTTPS URL (e.g. `https://your-rag-backend.onrender.com`).
+
+---
+
+### 2. Connect Inngest Cloud Webhook
+1. Open your [Inngest Cloud Dashboard](https://app.inngest.com).
+2. Go to **Apps** ➜ **Add App / Webhook**.
+3. Set the Webhook URL to: `https://your-rag-backend.onrender.com/api/inngest`.
+4. Inngest Cloud will automatically synchronize your functions (`rag/pdf.ingest`, `rag/chat.query`) and begin recording live step-by-step traces.
+
+---
+
+### 3. Frontend Deployment (Vercel)
+1. Sign up / Log in to [Vercel](https://vercel.com) (Free Tier).
+2. Click **Add New...** ➜ **Project**.
+3. Import `Hamed18/Conversational-Document-Assistant`.
+4. In **Project Settings**:
+   - **Root Directory**: Select `frontend` (Click Edit ➜ select `frontend`).
+   - **Framework Preset**: `Vite` (automatically detected).
+5. In **Environment Variables**, add:
+   - `VITE_API_BASE_URL`: `https://your-rag-backend.onrender.com` (your Render backend URL).
+6. Click **Deploy**. Vercel will build and provide your permanent public URL (e.g. `https://your-rag-app.vercel.app`).
+
+---
+
+## 💻 Local Development with React Frontend
+
+Run both backend and frontend locally:
+
+### Terminal 1: FastAPI Backend
+```powershell
+.\.venv\Scripts\uvicorn.exe main:app --reload --port 8000
+```
+
+### Terminal 2: React Dev Server
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+> Open **[http://localhost:3000](http://localhost:3000)** in your browser. API requests are automatically proxied to `http://localhost:8000`.
 
 ---
 
@@ -127,19 +200,18 @@ MODEL_FALLBACK_1=qwen/qwen-2.5-72b-instruct
 MODEL_FALLBACK_2=nvidia/nemotron-3-super-120b-a12b:free
 MODEL_FALLBACK_CHAIN=google/gemini-2.5-flash,qwen/qwen-2.5-72b-instruct,nvidia/nemotron-3-super-120b-a12b:free
 
-# Compatible OpenAI Settings
-OPENAI_API_KEY=your_key_here
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
-
-# Qdrant Vector Database
-QDRANT_URL=http://localhost:6333
+# Qdrant Vector Database (Remote Cloud or Local)
+QDRANT_URL=https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io
+QDRANT_API_KEY=your_qdrant_api_key_here
 QDRANT_COLLECTION=docs
 
-# Inngest Dev Server Configuration
-INNGEST_API_BASE=http://127.0.0.1:8288/v1
+# Inngest Cloud Configuration
+INNGEST_SIGNING_KEY=signkey-prod-your_signing_key_here
+INNGEST_EVENT_KEY=your_inngest_event_key_here
 ```
 
 ---
 
 ## 📖 Additional Documentation
-Detailed documentation on architecture, setup options, and error recovery is available in [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md).
+- System Architecture & Data Flow: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Local Setup & Fallback Testing: [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)

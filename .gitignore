@@ -10,8 +10,18 @@ wheels/
 .venv
 /uploads
 .env
+.env.local
 chat_history.json
 cloudflared.exe
 qdrant_server/
 qdrant_storage/
 scratch/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

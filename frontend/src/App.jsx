@@ -33,10 +33,22 @@ const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 const API_BASE = RAW_API_BASE.replace(/\/+$/, '');
 
 // -----------------------------------------------------------------------------
-// Citation Helpers for Visual Pills
+// Citation Helpers for Research Paper Style Citations [1], [2], etc.
 // -----------------------------------------------------------------------------
-function parseCitation(rawText) {
-  let clean = (rawText || '').replace(/^\[|\]$/g, '').trim();
+function parseCitation(rawText, fallbackIndex = null) {
+  let clean = (rawText || '').trim();
+
+  // Extract leading [1] or [1] -> if present
+  let id = null;
+  const idMatch = clean.match(/^\[(\d+)\]\s*(?:->)?\s*/);
+  if (idMatch) {
+    id = idMatch[1];
+    clean = clean.substring(idMatch[0].length).trim();
+  } else if (fallbackIndex) {
+    id = String(fallbackIndex);
+  }
+
+  clean = clean.replace(/^\[|\]$/g, '').trim();
   clean = clean.replace(/^Source:\s*/i, '');
 
   let filename = '';
@@ -58,14 +70,12 @@ function parseCitation(rawText) {
       }
     });
   } else {
-    // Regex extract Page and Section
     const pageMatch = clean.match(/(?:,\s*|\s+|^)Page:?\s*(\d+)/i);
     const sectionMatch = clean.match(/(?:,\s*|\s+|^)Section:?\s*([^,\]]+)/i);
 
     if (pageMatch) page = pageMatch[1].trim();
     if (sectionMatch) section = sectionMatch[1].trim();
 
-    // Filename is everything before Page: or Section: or first comma
     let fnPart = clean;
     const cutIdx = clean.search(/(?:,\s*|\s+)Page:?|(?:,\s*|\s+)Section:?/i);
     if (cutIdx !== -1) {
@@ -77,22 +87,34 @@ function parseCitation(rawText) {
     filename = fnPart;
   }
 
-  // Remove trailing commas, quotes, and isolate filename
   filename = (filename || '').replace(/[,;]+$/, '').replace(/^['"]|['"]$/g, '').trim();
   const displayName = filename.split(/[\\/]/).pop();
-  return { filename: displayName, page, section, raw: clean };
+  return { id, filename: displayName, page, section, raw: clean };
 }
 
-function renderWithCitations(children) {
+function getCitationTooltip(sources, num) {
+  if (!sources || !Array.isArray(sources)) return `Reference [${num}]`;
+  const found = sources.find((s, idx) => {
+    const p = parseCitation(s, idx + 1);
+    return p.id === String(num);
+  });
+  if (found) {
+    const p = parseCitation(found);
+    return `[${num}] ${p.filename}${p.page ? ` (Page ${p.page})` : ''}${p.section ? ` - ${p.section}` : ''}`;
+  }
+  return `Jump to Reference [${num}]`;
+}
+
+function renderWithCitations(children, msgIndex, msgSources, onCitationClick) {
   if (Array.isArray(children)) {
     return children.map((child, idx) => (
-      <React.Fragment key={idx}>{renderWithCitations(child)}</React.Fragment>
+      <React.Fragment key={idx}>{renderWithCitations(child, msgIndex, msgSources, onCitationClick)}</React.Fragment>
     ));
   }
   if (typeof children !== 'string') return children;
 
-  // Match [Source: ...], [... Page ...], [... Section ...]
-  const regex = /\[(Source:[^\]]+|[^\]]*(?:Page|Section|\.pdf)[^\]]*)\]/gi;
+  // Match numeric citations: [1], [2], [1, 2], [1][2] OR legacy [Source: ...]
+  const regex = /\[(\d+(?:\s*,\s*\d+)*)\]|\[(Source:[^\]]+|[^\]]*(?:Page|Section|\.pdf)[^\]]*)\]/gi;
   if (!regex.test(children)) return children;
 
   const parts = [];
@@ -103,29 +125,56 @@ function renderWithCitations(children) {
     if (match.index > lastIdx) {
       parts.push(children.substring(lastIdx, match.index));
     }
-    const { filename, page, section, raw } = parseCitation(match[1]);
-    parts.push(
-      <span
-        key={match.index}
-        className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 my-0.5 rounded-lg bg-blue-950/80 border border-blue-500/40 text-blue-200 font-mono text-[11px] align-baseline shadow-sm hover:border-blue-400 hover:bg-blue-900/60 transition-colors select-none cursor-pointer"
-        title={`Verified Citation: ${raw}`}
-      >
-        <FileText size={11} className="text-blue-400 flex-shrink-0" />
-        <span className="font-semibold text-slate-100 truncate max-w-[150px]">{filename}</span>
-        {page && (
-          <span className="px-1.5 py-0.2 rounded bg-blue-600/30 text-blue-300 border border-blue-400/30 text-[10px] font-semibold">
-            P.{page}
-          </span>
-        )}
-        {section && section !== `Page ${page}` && (
-          <span className="px-1.5 py-0.2 rounded bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 text-[10px] truncate max-w-[130px]">
-            {section}
-          </span>
-        )}
-      </span>
-    );
+
+    if (match[1]) {
+      // Numeric citation(s) e.g. "1" or "1, 2"
+      const nums = match[1].split(/,\s*/).map((n) => n.trim()).filter(Boolean);
+      nums.forEach((num, nIdx) => {
+        const tooltip = getCitationTooltip(msgSources, num);
+        parts.push(
+          <button
+            key={`${match.index}-${nIdx}`}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (onCitationClick) onCitationClick(msgIndex, num);
+            }}
+            className="inline-flex items-center justify-center min-w-[20px] h-[19px] px-1.5 mx-0.5 -mt-0.5 rounded-md bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 hover:text-blue-100 border border-blue-500/40 text-[11px] font-mono font-bold align-baseline transition-all duration-150 active:scale-95 cursor-pointer shadow-sm group"
+            title={tooltip}
+          >
+            [{num}]
+          </button>
+        );
+      });
+    } else if (match[2]) {
+      // Legacy formatted citation [Source: ...]
+      const { filename, page, section, raw } = parseCitation(match[2]);
+      parts.push(
+        <span
+          key={match.index}
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 my-0.5 rounded-lg bg-blue-950/80 border border-blue-500/40 text-blue-200 font-mono text-[11px] align-baseline shadow-sm hover:border-blue-400 hover:bg-blue-900/60 transition-colors select-none cursor-pointer"
+          title={`Verified Citation: ${raw}`}
+        >
+          <FileText size={11} className="text-blue-400 flex-shrink-0" />
+          <span className="font-semibold text-slate-100 truncate max-w-[150px]">{filename}</span>
+          {page && (
+            <span className="px-1.5 py-0.2 rounded bg-blue-600/30 text-blue-300 border border-blue-400/30 text-[10px] font-semibold">
+              P.{page}
+            </span>
+          )}
+          {section && section !== `Page ${page}` && (
+            <span className="px-1.5 py-0.2 rounded bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 text-[10px] truncate max-w-[130px]">
+              {section}
+            </span>
+          )}
+        </span>
+      );
+    }
+
     lastIdx = regex.lastIndex;
   }
+
   if (lastIdx < children.length) {
     parts.push(children.substring(lastIdx));
   }
@@ -183,7 +232,14 @@ export default function App() {
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [highlightedRef, setHighlightedRef] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState(null);
@@ -204,6 +260,18 @@ export default function App() {
   const sidebarFileInputRef = useRef(null);
   const chatboxFileInputRef = useRef(null);
   const heroFileInputRef = useRef(null);
+
+  const scrollToCitation = (msgIndex, refNum) => {
+    const refId = `ref-${msgIndex}-${refNum}`;
+    const el = document.getElementById(refId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setHighlightedRef(refId);
+      setTimeout(() => {
+        setHighlightedRef(null);
+      }, 2500);
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Persistence & Initialization
@@ -243,6 +311,16 @@ export default function App() {
     checkHealth();
     const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Handle mobile screen detection on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   // Auto-scroll chat to bottom
@@ -369,6 +447,10 @@ export default function App() {
     };
     setSessions((prev) => ({ [newId]: newSession, ...prev }));
     setActiveSessionId(newId);
+    setInput('');
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
   };
 
   const handleDeleteChat = (e, id) => {
@@ -527,14 +609,26 @@ export default function App() {
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <div className="flex h-screen w-screen bg-[#0f172a] text-slate-100 font-sans antialiased overflow-hidden">
+    <div className="flex h-[100dvh] w-screen bg-[#0f172a] text-slate-100 font-sans antialiased overflow-hidden relative">
+      {/* Mobile Backdrop Overlay */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity duration-300 md:hidden"
+        />
+      )}
+
       {/* =====================================================================
-          SIDEBAR
+          SIDEBAR (Slide-over drawer on mobile, collapsible on desktop)
       ====================================================================== */}
       <aside
-        className={`${
-          sidebarOpen ? 'translate-x-0 w-80' : '-translate-x-full w-0'
-        } transition-all duration-300 ease-in-out bg-[#090d16] border-r border-slate-800 flex flex-col flex-shrink-0 z-30 h-full overflow-hidden`}
+        className={`
+          ${isMobile
+            ? `fixed inset-y-0 left-0 z-50 w-72 sm:w-80 shadow-2xl border-r border-slate-800 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`
+            : `relative ${sidebarOpen ? 'translate-x-0 w-80 border-r border-slate-800' : '-translate-x-full w-0 border-r-0 pointer-events-none'}`
+          }
+          transition-all duration-300 ease-in-out bg-[#090d16] flex flex-col flex-shrink-0 h-full overflow-hidden
+        `}
       >
         {/* AskFiles Logo Header with Sidebar Collapse Icon */}
         <div className="p-4 border-b border-slate-800 flex flex-col gap-3">
@@ -598,7 +692,10 @@ export default function App() {
                     return (
                       <div
                         key={s.id}
-                        onClick={() => setActiveSessionId(s.id)}
+                        onClick={() => {
+                          setActiveSessionId(s.id);
+                          if (isMobile) setSidebarOpen(false);
+                        }}
                         className={`group flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors duration-150 mb-1 ${
                           isActive
                             ? 'bg-slate-800/90 text-white font-medium border border-slate-700/60 shadow-sm'
@@ -858,21 +955,21 @@ export default function App() {
           MAIN CHAT CONTAINER
       ====================================================================== */}
       <main className="flex-1 flex flex-col h-full bg-[#0f172a] relative overflow-hidden">
-        {/* Top Header Bar with AskFiles Logo Format */}
-        <header className="h-14 border-b border-slate-800/80 bg-[#0f172a]/95 backdrop-blur px-4 flex items-center justify-between flex-shrink-0 z-20">
-          <div className="flex items-center gap-3">
-            {!sidebarOpen && (
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-                title="Open Sidebar"
-              >
-                <PanelLeftOpen size={18} />
-              </button>
-            )}
+        {/* Top Header Bar (Fixed / Sticky on Mobile & Desktop) */}
+        <header className="sticky top-0 h-14 border-b border-slate-800/80 bg-[#0f172a]/95 backdrop-blur px-3 sm:px-4 flex items-center justify-between flex-shrink-0 z-30">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Hamburger / Sidebar Toggle Button */}
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-2 -ml-1 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors active:scale-95"
+              title={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+              aria-label="Toggle navigation menu"
+            >
+              <Menu size={20} />
+            </button>
 
             {/* AskFiles Logo in Top Bar */}
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
                 <FileText size={15} className="text-white drop-shadow" />
               </div>
@@ -881,6 +978,17 @@ export default function App() {
               </span>
             </div>
           </div>
+
+          {/* Right Action: Quick New Chat Button (matches ChatGPT mobile header) */}
+          <button
+            onClick={handleNewChat}
+            className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/60 font-medium text-xs transition-all active:scale-95 shadow-sm"
+            title="Start New Conversation"
+            aria-label="New Chat"
+          >
+            <Plus size={15} className="text-blue-400" />
+            <span className="hidden sm:inline">New Chat</span>
+          </button>
         </header>
 
         {/* Scrollable Messages Stream / Main Viewpoint */}
@@ -891,25 +999,26 @@ export default function App() {
         >
           {activeSession.messages.length === 0 ? (
             /* Empty State Hero */
-            <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto text-center px-4 py-8 animate-fade-in">
+            <div className="min-h-full flex flex-col items-center justify-center max-w-2xl mx-auto text-center px-3 py-4 sm:px-4 sm:py-8 animate-fade-in">
               {/* AskFiles Brand Logo in Viewpoint */}
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-xl shadow-blue-500/20">
-                  <FileText size={24} className="text-white drop-shadow" />
+              <div className="flex items-center gap-2.5 sm:gap-3 mb-2">
+                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-xl shadow-blue-500/20">
+                  <FileText size={20} className="text-white drop-shadow sm:hidden" />
+                  <FileText size={24} className="text-white drop-shadow hidden sm:block" />
                 </div>
-                <span className="text-3xl font-extrabold tracking-tight text-white flex items-center">
+                <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center">
                   Ask<span className="text-blue-400">Files</span>
                 </span>
               </div>
 
               {/* Motto */}
-              <p className="text-xs text-blue-300 font-medium tracking-wide mb-6 max-w-md">
+              <p className="text-xs text-blue-300 font-medium tracking-wide mb-4 sm:mb-6 max-w-md px-2">
                 Intelligent Conversational Documents Assistant that simplify your document
               </p>
 
               {/* Heading */}
-              <h3 className="text-xl font-bold text-white mb-2">How can I help with your documents?</h3>
-              <p className="text-sm text-slate-400 mb-6 max-w-md">
+              <h3 className="text-lg sm:text-xl font-bold text-white mb-1.5 sm:mb-2">How can I help with your documents?</h3>
+              <p className="text-xs sm:text-sm text-slate-400 mb-4 sm:mb-6 max-w-md px-2">
                 Upload PDFs using the sidebar, chatbox, or the box below and ask questions. Answers are grounded in your documents with exact page numbers and section citations.
               </p>
 
@@ -927,7 +1036,7 @@ export default function App() {
                     handleFileUpload(e.dataTransfer.files[0]);
                   }
                 }}
-                className={`w-full max-w-md p-5 border-2 border-dashed rounded-2xl mb-6 transition-all duration-200 cursor-pointer ${
+                className={`w-full max-w-md p-4 sm:p-5 border-2 border-dashed rounded-2xl mb-4 sm:mb-6 transition-all duration-200 cursor-pointer ${
                   isDragOver
                     ? 'border-blue-400 bg-blue-500/10 scale-[1.02]'
                     : 'border-slate-700 hover:border-slate-500 bg-slate-800/40 hover:bg-slate-800/60'
@@ -1005,13 +1114,13 @@ export default function App() {
                         <div className="prose prose-invert prose-sm max-w-none break-words">
                           <ReactMarkdown
                             components={{
-                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{renderWithCitations(children)}</p>,
-                              li: ({ children }) => <li className="leading-relaxed mb-1">{renderWithCitations(children)}</li>,
-                              blockquote: ({ children }) => <blockquote className="border-l-4 border-blue-500/50 pl-3 italic my-2">{renderWithCitations(children)}</blockquote>,
-                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 text-slate-100">{renderWithCitations(children)}</h1>,
-                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 text-slate-100">{renderWithCitations(children)}</h2>,
-                              h3: ({ children }) => <h3 className="text-base font-semibold mb-1 text-slate-100">{renderWithCitations(children)}</h3>,
-                              td: ({ children }) => <td className="p-2 border border-slate-700">{renderWithCitations(children)}</td>,
+                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</p>,
+                              li: ({ children }) => <li className="leading-relaxed mb-1">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</li>,
+                              blockquote: ({ children }) => <blockquote className="border-l-4 border-blue-500/50 pl-3 italic my-2">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</blockquote>,
+                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h1>,
+                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h2>,
+                              h3: ({ children }) => <h3 className="text-base font-semibold mb-1 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h3>,
+                              td: ({ children }) => <td className="p-2 border border-slate-700">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</td>,
                             }}
                           >
                             {msg.content}
@@ -1041,51 +1150,60 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Sources Accordion with Visual Citation Cards */}
+                          {/* Academic References / Bottom Citation Layer */}
                           {msg.sources && msg.sources.length > 0 && (
-                            <div className="mt-1">
-                              <button
-                                onClick={() =>
-                                  setOpenCitations((prev) => ({
-                                    ...prev,
-                                    [index]: !prev[index],
-                                  }))
-                                }
-                                className="flex items-center gap-1.5 text-[11px] text-blue-400 hover:text-blue-300 font-medium transition-colors"
-                              >
-                                <FileText size={12} />
-                                <span>Sources & Citations ({msg.sources.length})</span>
-                                {openCitations[index] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                              </button>
+                            <div className="mt-3.5 pt-3 border-t border-slate-700/60">
+                              <div className="flex items-center gap-1.5 mb-2 text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                                <BookOpen size={13} className="text-blue-400" />
+                                <span>References & Citations ({msg.sources.length})</span>
+                              </div>
 
-                              {openCitations[index] && (
-                                <div className="mt-2 space-y-1.5 pl-1">
-                                  {msg.sources.map((src, sIdx) => {
-                                    const { filename, page, section } = parseCitation(src);
-                                    return (
-                                      <div
-                                        key={sIdx}
-                                        className="flex flex-wrap items-center gap-2 p-2 rounded-xl bg-slate-800/90 border border-slate-700/70 text-xs shadow-sm hover:border-blue-500/40 transition-colors"
-                                      >
-                                        <div className="flex items-center gap-1.5 font-medium text-slate-100">
-                                          <FileText size={13} className="text-blue-400 flex-shrink-0" />
-                                          <span className="font-mono text-xs">{filename}</span>
-                                        </div>
-                                        {page && (
-                                          <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-mono font-semibold">
-                                            Page {page}
-                                          </span>
-                                        )}
-                                        {section && section !== `Page ${page}` && (
-                                          <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono">
-                                            Section: {section}
-                                          </span>
-                                        )}
+                              <div className="space-y-1.5">
+                                {msg.sources.map((src, sIdx) => {
+                                  const parsed = parseCitation(src, sIdx + 1);
+                                  const refId = `ref-${index}-${parsed.id || sIdx + 1}`;
+                                  const isHighlighted = highlightedRef === refId;
+                                  return (
+                                    <div
+                                      id={refId}
+                                      key={sIdx}
+                                      className={`flex flex-wrap items-center gap-2 p-2.5 rounded-xl text-xs transition-all duration-300 ${
+                                        isHighlighted
+                                          ? 'bg-blue-950/90 border-2 border-blue-400 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/25 scale-[1.01]'
+                                          : 'bg-slate-800/80 border border-slate-700/70 hover:border-blue-500/40'
+                                      }`}
+                                    >
+                                      {/* [1] -> */}
+                                      <div className="flex items-center gap-1">
+                                        <span className="px-2 py-0.5 rounded-md bg-blue-600/30 text-blue-300 border border-blue-500/30 font-mono text-xs font-bold flex-shrink-0">
+                                          [{parsed.id || sIdx + 1}]
+                                        </span>
+                                        <span className="text-slate-400 font-mono text-xs">→</span>
                                       </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
+
+                                      {/* PDF Name */}
+                                      <div className="flex items-center gap-1.5 font-medium text-slate-100 min-w-0">
+                                        <FileText size={13} className="text-blue-400 flex-shrink-0" />
+                                        <span className="font-mono text-xs truncate">{parsed.filename}</span>
+                                      </div>
+
+                                      {/* Page No */}
+                                      {parsed.page && (
+                                        <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-mono font-semibold">
+                                          Page {parsed.page}
+                                        </span>
+                                      )}
+
+                                      {/* Section Title */}
+                                      {parsed.section && (
+                                        <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono truncate max-w-[220px]">
+                                          Section: {parsed.section}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1137,7 +1255,7 @@ export default function App() {
         {/* =====================================================================
             FIXED PINNED BOTTOM INPUT BAR WITH UPLOAD IN CHATBOX
         ====================================================================== */}
-        <div className="p-4 border-t border-slate-800/80 bg-[#0f172a] flex-shrink-0">
+        <div className="sticky bottom-0 border-t border-slate-800/80 bg-[#0f172a]/95 backdrop-blur px-3 py-2.5 sm:px-4 sm:py-3 flex-shrink-0 z-20">
           <div className="max-w-3xl mx-auto">
             {/* Inline Upload Message */}
             {uploadMessage && (

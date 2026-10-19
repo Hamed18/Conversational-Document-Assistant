@@ -148,18 +148,17 @@ def execute_query_cascade(question: str, top_k: int = 5, requested_model: str | 
 
     context_block = "\n\n".join(f"- {c}" for c in found["contexts"])
     system_prompt = (
-        "You are AskFiles AI, a precise, intelligent, and grounded document assistant.\n"
-        "MANDATORY CITATION REQUIREMENT:\n"
-        "1. After EVERY piece of information, claim, finding, or sentence you state, you MUST append an inline citation in square brackets [ ... ] citing the exact source file, page number, and section.\n"
-        "2. Format: [Source: <filename>, Page: <page_number>, Section: <section_title>]\n"
-        "   If section is unavailable or same as page, format as: [Source: <filename>, Page: <page_number>]\n"
-        "3. Place the bracketed citation immediately following the fact or sentence (e.g. 'Random Forests combine multiple decision trees to reduce variance [Source: Ensemble.pdf, Page: 14, Section: Bagging & Forests].')\n"
-        "4. Rely ONLY on the provided context. If the context does not answer the question, state that clearly."
+        "You are AskFiles AI, a precise, intelligent, and grounded document assistant adhering to academic research standards.\n"
+        "MANDATORY CITATION RULES:\n"
+        "1. After EVERY piece of information, claim, finding, or sentence you state, you MUST append an inline numeric citation in brackets: [1], [2], [3], etc., citing the corresponding numbered context chunk (e.g. 'Support Vector Machines maximize the street width between opposite classes [1].').\n"
+        "2. If multiple source chunks support a statement, combine them such as [1][2] or [1, 2].\n"
+        "3. Use ONLY the numeric reference markers [1], [2], etc., corresponding to the numbered context chunks provided below. Do NOT write document filenames, page numbers, or raw URLs in the body text—they will be rendered automatically in the References layer at the bottom.\n"
+        "4. Rely ONLY on the provided context chunks. If the context does not answer the question, state that clearly."
     )
     user_content = (
-        f"Context with document, page, and section provenance:\n\n{context_block}\n\n"
+        f"Referenced Document Chunks:\n\n{context_block}\n\n"
         f"User Question: {question}\n\n"
-        "Provide a grounded, comprehensive answer. Add an inline citation in square brackets [Source: <filename>, Page: <page>, Section: <section>] after every sentence or statement of fact."
+        "Provide a grounded, comprehensive answer. Cite every fact or sentence using numeric citations in brackets like [1], [2] matching the source numbers above."
     )
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")

@@ -81,6 +81,7 @@ class QdrantStorage:
         sources = []
         seen_sources = set()
 
+        idx = 1
         for r in results:
             payload = getattr(r, "payload", None) or {}
             text = payload.get("text", "")
@@ -89,25 +90,27 @@ class QdrantStorage:
             section = payload.get("section")
 
             if text:
-                # Include page and section in contextual header for grounded LLM reasoning
+                # Include numeric index, page, and section in contextual header for grounded LLM reasoning
                 header_parts = [f"Source: {source}"]
                 if page:
                     header_parts.append(f"Page: {page}")
                 if section:
                     header_parts.append(f"Section: {section}")
                 header_line = " | ".join(header_parts)
-                contexts.append(f"[{header_line}]\n{text}")
+                contexts.append(f"[{idx}] {header_line}\n{text}")
 
-                # Format human-readable citation label for UI
+                # Format human-readable citation label with matching numeric reference [idx]
                 citation_parts = [source]
                 if page:
                     citation_parts.append(f"Page {page}")
                 if section and section != f"Page {page}":
                     citation_parts.append(f"Section: {section}")
-                citation_label = " • ".join(citation_parts)
+                citation_label = f"[{idx}] " + " • ".join(citation_parts)
 
                 if citation_label not in seen_sources:
                     seen_sources.add(citation_label)
                     sources.append(citation_label)
+
+                idx += 1
 
         return {"contexts": contexts, "sources": sources}

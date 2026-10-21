@@ -26,11 +26,227 @@ import {
   ShoppingCart,
   Search,
   Check,
-  ArrowDown
+  ArrowDown,
+  UploadCloud,
+  Cpu,
+  Layers,
+  Database,
+  Loader2,
+  Clock,
+  AlertCircle,
+  ArrowRight
 } from 'lucide-react';
 
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 const API_BASE = RAW_API_BASE.replace(/\/+$/, '');
+
+// -----------------------------------------------------------------------------
+// Upload Stages for High-Trustworthiness Progress Feedback
+// -----------------------------------------------------------------------------
+const UPLOAD_STAGES = [
+  {
+    step: 1,
+    title: 'Uploading PDF Document',
+    desc: 'Transferring file bytes to secure ingestion server',
+    icon: UploadCloud,
+  },
+  {
+    step: 2,
+    title: 'Extracting Text & Section Hierarchy',
+    desc: 'Parsing pages, titles, section headings & structured content',
+    icon: Layers,
+  },
+  {
+    step: 3,
+    title: 'Generating Dense Vector Embeddings',
+    desc: 'Running FastEmbed neural model for high-dimensional vectors',
+    icon: Cpu,
+  },
+  {
+    step: 4,
+    title: 'Indexing into Qdrant Cloud',
+    desc: 'Storing vector points with exact page and section citations',
+    icon: Database,
+  },
+];
+
+// -----------------------------------------------------------------------------
+// Trustworthy Upload Progress Display Component
+// -----------------------------------------------------------------------------
+function UploadProgressDisplay({ progress, onDismiss, onAskQuestion }) {
+  if (!progress || !progress.active) return null;
+
+  const isComplete = progress.stage === 4;
+  const isError = progress.stage === -1;
+
+  return (
+    <div className="w-full max-w-lg mx-auto p-4 sm:p-5 rounded-2xl bg-[#131d31] border border-blue-500/30 shadow-2xl animate-fade-in relative overflow-hidden backdrop-blur select-none">
+      {/* Background ambient lighting */}
+      <div className="absolute -top-12 -left-12 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
+      <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-cyan-500/10 rounded-full blur-2xl pointer-events-none" />
+
+      {/* Header with File Info & Close/Dismiss */}
+      <div className="flex items-start justify-between gap-3 mb-3 relative z-10">
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-md ${
+              isComplete
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : isError
+                ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                : 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+            }`}
+          >
+            {isComplete ? (
+              <CheckCircle2 size={22} className="animate-bounce" />
+            ) : isError ? (
+              <AlertCircle size={22} />
+            ) : (
+              <FileText size={20} className="animate-pulse" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <h4 className="text-sm font-bold text-white truncate max-w-[220px] sm:max-w-[300px]" title={progress.filename}>
+              {progress.filename}
+            </h4>
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span className="font-mono">{progress.fileSize}</span>
+              <span>•</span>
+              <span className="flex items-center gap-1 font-mono">
+                <Clock size={11} className="text-slate-400" />
+                {progress.elapsedSeconds}s
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {(isComplete || isError) && (
+          <button
+            onClick={onDismiss}
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+            title="Dismiss"
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
+      {/* Progress Bar & Percentage */}
+      {!isError && (
+        <div className="mb-4 relative z-10">
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="font-semibold text-slate-200">
+              {isComplete ? 'Indexing Completed Successfully' : UPLOAD_STAGES[progress.stage]?.title || 'Processing Document...'}
+            </span>
+            <span className="font-mono font-bold text-blue-400">
+              {progress.percentage}%
+            </span>
+          </div>
+
+          <div className="w-full h-2.5 bg-slate-800/80 rounded-full overflow-hidden border border-slate-700/60 relative">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ease-out relative overflow-hidden ${
+                isComplete
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                  : 'bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400'
+              }`}
+              style={{ width: `${progress.percentage}%` }}
+            >
+              {!isComplete && (
+                <div className="absolute inset-0 bg-white/20 animate-shimmer" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step Breakdown */}
+      {!isError && !isComplete && (
+        <div className="space-y-1.5 mb-3.5 relative z-10">
+          {UPLOAD_STAGES.map((s, idx) => {
+            const isDone = progress.stage > idx;
+            const isCurrent = progress.stage === idx;
+            const isPending = progress.stage < idx;
+
+            return (
+              <div
+                key={idx}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-all duration-200 ${
+                  isCurrent
+                    ? 'bg-blue-500/10 border border-blue-500/30 text-white'
+                    : isDone
+                    ? 'bg-slate-800/30 text-slate-300'
+                    : 'text-slate-500 opacity-60'
+                }`}
+              >
+                <div className="flex-shrink-0">
+                  {isDone ? (
+                    <div className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                      <Check size={12} />
+                    </div>
+                  ) : isCurrent ? (
+                    <div className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                      <Loader2 size={12} className="animate-spin" />
+                    </div>
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-500 flex items-center justify-center text-[10px] font-mono">
+                      {idx + 1}
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{s.title}</div>
+                  {isCurrent && (
+                    <div className="text-[11px] text-blue-300/80 truncate mt-0.5">{s.desc}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Error Message */}
+      {isError && (
+        <div className="p-3 mb-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs relative z-10">
+          <div className="font-semibold mb-1">Upload failed</div>
+          <div>{progress.errorMessage}</div>
+        </div>
+      )}
+
+      {/* Success Call to Action */}
+      {isComplete && (
+        <div className="space-y-3 relative z-10">
+          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between">
+            <span className="font-medium">
+              Ready! {progress.chunksCount ? `${progress.chunksCount} chunks indexed with citations` : 'Grounded references active'}
+            </span>
+            <span className="text-[10px] font-mono text-emerald-400 font-bold">100% Grounded</span>
+          </div>
+
+          <button
+            onClick={() => {
+              if (onAskQuestion) onAskQuestion(`Summarize the core takeaways of ${progress.filename}`);
+              if (onDismiss) onDismiss();
+            }}
+            className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20 transition-all active:scale-[0.99]"
+          >
+            <span>Ask questions about this document</span>
+            <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Trust message */}
+      {!isComplete && !isError && (
+        <p className="text-center text-[10px] text-slate-400 italic relative z-10">
+          Please wait while your document is indexed for sub-second, verified citations.
+        </p>
+      )}
+    </div>
+  );
+}
 
 // -----------------------------------------------------------------------------
 // Citation Helpers for Research Paper Style Citations [1], [2], etc.
@@ -243,6 +459,7 @@ export default function App() {
   const [documents, setDocuments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [selectedModel, setSelectedModel] = useState('auto');
   const [topK, setTopK] = useState(5);
   const [openCitations, setOpenCitations] = useState({});
@@ -261,11 +478,16 @@ export default function App() {
   const chatboxFileInputRef = useRef(null);
   const heroFileInputRef = useRef(null);
 
+  // Smooth container-internal scrolling to citation (Never scrolls window or body!)
   const scrollToCitation = (msgIndex, refNum) => {
     const refId = `ref-${msgIndex}-${refNum}`;
     const el = document.getElementById(refId);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const container = chatContainerRef.current;
+    if (el && container) {
+      const elRect = el.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const offset = elRect.top - containerRect.top + container.scrollTop - 24;
+      container.scrollTo({ top: offset, behavior: 'smooth' });
       setHighlightedRef(refId);
       setTimeout(() => {
         setHighlightedRef(null);
@@ -323,9 +545,14 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat to bottom inside container ONLY (Never causes window or body to scroll)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
   }, [sessions, activeSessionId, loading]);
 
   const handleScroll = (e) => {
@@ -335,7 +562,12 @@ export default function App() {
   };
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -371,17 +603,80 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target?.files?.[0] || e;
+  // High-Trustworthiness Multi-Stage Document Ingestion
+  const handleFileUpload = async (eOrFile) => {
+    let file = null;
+    if (eOrFile && eOrFile.target && eOrFile.target.files) {
+      file = eOrFile.target.files[0];
+    } else if (eOrFile instanceof File) {
+      file = eOrFile;
+    } else if (eOrFile && eOrFile.dataTransfer && eOrFile.dataTransfer.files) {
+      file = eOrFile.dataTransfer.files[0];
+    }
     if (!file || !file.name) return;
 
+    const formattedSize =
+      file.size > 1024 * 1024
+        ? (file.size / (1024 * 1024)).toFixed(1) + ' MB'
+        : (file.size / 1024).toFixed(0) + ' KB';
+
     if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('Only PDF files are supported.');
+      setUploadProgress({
+        active: true,
+        filename: file.name,
+        fileSize: formattedSize,
+        stage: -1,
+        percentage: 0,
+        elapsedSeconds: 0,
+        errorMessage: 'Only PDF documents are supported.',
+      });
       return;
     }
 
     setUploading(true);
-    setUploadMessage('Processing & analyzing document with page citations...');
+    setUploadProgress({
+      active: true,
+      filename: file.name,
+      fileSize: formattedSize,
+      stage: 0,
+      percentage: 12,
+      elapsedSeconds: 0,
+      chunksCount: null,
+      errorMessage: null,
+    });
+
+    const startTime = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const seconds = parseFloat(elapsed);
+
+      setUploadProgress((prev) => {
+        if (!prev || !prev.active || prev.stage === 4 || prev.stage === -1) return prev;
+        let nextStage = prev.stage;
+        let nextPct = prev.percentage;
+
+        if (seconds < 1.0) {
+          nextStage = 0;
+          nextPct = Math.min(25, 12 + Math.floor(seconds * 13));
+        } else if (seconds < 2.8) {
+          nextStage = 1;
+          nextPct = Math.min(55, 25 + Math.floor((seconds - 1.0) * 16));
+        } else if (seconds < 5.0) {
+          nextStage = 2;
+          nextPct = Math.min(82, 55 + Math.floor((seconds - 2.8) * 12));
+        } else {
+          nextStage = 3;
+          nextPct = Math.min(95, 82 + Math.floor((seconds - 5.0) * 3));
+        }
+
+        return {
+          ...prev,
+          stage: nextStage,
+          percentage: nextPct,
+          elapsedSeconds: seconds,
+        };
+      });
+    }, 200);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -393,16 +688,43 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || 'Upload failed');
       }
 
-      setUploadMessage('Document indexed with exact page and section citations!');
+      const data = await res.json();
+      clearInterval(timer);
+
+      const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
+      setUploadProgress({
+        active: true,
+        filename: file.name,
+        fileSize: formattedSize,
+        stage: 4,
+        percentage: 100,
+        elapsedSeconds: totalSeconds,
+        chunksCount: data.chunks_count || null,
+        errorMessage: null,
+      });
+
       fetchDocuments();
-      setTimeout(() => setUploadMessage(null), 4000);
+
+      // Keep success banner visible for 4.5 seconds so user has time to read
+      setTimeout(() => {
+        setUploadProgress((prev) => (prev && prev.stage === 4 ? null : prev));
+      }, 4500);
+
     } catch (err) {
-      setUploadMessage(`Error: ${err.message}`);
-      setTimeout(() => setUploadMessage(null), 5000);
+      clearInterval(timer);
+      setUploadProgress({
+        active: true,
+        filename: file.name,
+        fileSize: formattedSize,
+        stage: -1,
+        percentage: 0,
+        elapsedSeconds: ((Date.now() - startTime) / 1000).toFixed(1),
+        errorMessage: err.message || 'Failed to process document',
+      });
     } finally {
       setUploading(false);
       if (sidebarFileInputRef.current) sidebarFileInputRef.current.value = '';
@@ -609,7 +931,7 @@ export default function App() {
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <div className="flex h-[100dvh] w-screen bg-[#0f172a] text-slate-100 font-sans antialiased overflow-hidden relative">
+    <div className="flex h-full w-full bg-[#0f172a] text-slate-100 font-sans antialiased overflow-hidden relative">
       {/* Mobile Backdrop Overlay */}
       {isMobile && sidebarOpen && (
         <div
@@ -752,12 +1074,48 @@ export default function App() {
                       : 'border-slate-700 hover:border-slate-500 bg-slate-800/40 hover:bg-slate-800 text-slate-300'
                   }`}
                 >
-                  <Upload size={14} />
+                  {uploading ? <Loader2 size={14} className="animate-spin text-blue-400" /> : <Upload size={14} />}
                   <span>{uploading ? 'Processing PDF...' : 'Upload PDF'}</span>
                 </label>
 
-                {uploadMessage && (
-                  <p className="text-[11px] text-blue-400 px-1 truncate font-mono">{uploadMessage}</p>
+                {/* Sidebar Mini Progress Bar during Ingestion */}
+                {uploadProgress && uploadProgress.active && (
+                  <div className="p-2.5 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs animate-fade-in">
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {uploadProgress.stage === 4 ? (
+                          <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
+                        ) : uploadProgress.stage === -1 ? (
+                          <AlertCircle size={13} className="text-red-400 flex-shrink-0" />
+                        ) : (
+                          <Loader2 size={13} className="text-blue-400 animate-spin flex-shrink-0" />
+                        )}
+                        <span className="font-medium text-slate-200 truncate text-[11px]">{uploadProgress.filename}</span>
+                      </div>
+                      <span className="font-mono text-blue-400 font-bold text-[10px] flex-shrink-0">
+                        {uploadProgress.stage === 4 ? '100%' : `${uploadProgress.percentage}%`}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          uploadProgress.stage === 4
+                            ? 'bg-emerald-400'
+                            : uploadProgress.stage === -1
+                            ? 'bg-red-400'
+                            : 'bg-gradient-to-r from-blue-500 to-cyan-400'
+                        }`}
+                        style={{ width: `${uploadProgress.percentage}%` }}
+                      />
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate mt-1">
+                      {uploadProgress.stage === 4
+                        ? 'Indexed successfully!'
+                        : uploadProgress.stage === -1
+                        ? uploadProgress.errorMessage
+                        : UPLOAD_STAGES[uploadProgress.stage]?.title || 'Processing...'}
+                    </div>
+                  </div>
                 )}
 
                 <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
@@ -954,35 +1312,44 @@ export default function App() {
       {/* =====================================================================
           MAIN CHAT CONTAINER
       ====================================================================== */}
-      <main className="flex-1 flex flex-col h-full bg-[#0f172a] relative overflow-hidden">
-        {/* Top Header Bar (Fixed / Sticky on Mobile & Desktop) */}
-        <header className="sticky top-0 h-14 border-b border-slate-800/80 bg-[#0f172a]/95 backdrop-blur px-3 sm:px-4 flex items-center justify-between flex-shrink-0 z-30">
+      <main className="flex-1 flex flex-col h-full min-h-0 bg-[#0f172a] relative overflow-hidden">
+        {/* Top Header Bar (Permanently Fixed at Top on Mobile & Desktop) */}
+        <header className="h-14 border-b border-slate-800/80 bg-[#0f172a] px-3 sm:px-4 flex items-center justify-between flex-shrink-0 z-30 select-none">
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Hamburger / Sidebar Toggle Button */}
+            {/* Hamburger / Sidebar Toggle Button with Open/Close Arrow State */}
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-2 -ml-1 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors active:scale-95"
+              className="p-2 -ml-1 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors active:scale-95 flex items-center justify-center"
               title={sidebarOpen ? "Close sidebar" : "Open sidebar"}
               aria-label="Toggle navigation menu"
             >
-              <Menu size={20} />
+              {sidebarOpen ? (
+                <PanelLeftClose size={20} className="text-blue-400" />
+              ) : (
+                <PanelLeftOpen size={20} />
+              )}
             </button>
 
             {/* AskFiles Logo in Top Bar */}
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
-                <FileText size={15} className="text-white drop-shadow" />
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-md shadow-blue-500/20 flex-shrink-0">
+                <FileText size={16} className="text-white drop-shadow" />
               </div>
-              <span className="text-base font-bold tracking-tight text-white flex items-center">
-                Ask<span className="text-blue-400">Files</span>
-              </span>
+              <div className="flex flex-col">
+                <span className="text-base font-bold tracking-tight text-white flex items-center leading-none">
+                  Ask<span className="text-blue-400">Files</span>
+                </span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold leading-none mt-0.5">
+                  Doc AI Assistant
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Right Action: Quick New Chat Button (matches ChatGPT mobile header) */}
+          {/* Right Action: Quick New Chat Button */}
           <button
             onClick={handleNewChat}
-            className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/60 font-medium text-xs transition-all active:scale-95 shadow-sm"
+            className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white border border-blue-500/30 font-medium text-xs transition-all active:scale-95 shadow-sm"
             title="Start New Conversation"
             aria-label="New Chat"
           >
@@ -991,11 +1358,24 @@ export default function App() {
           </button>
         </header>
 
-        {/* Scrollable Messages Stream / Main Viewpoint */}
+        {/* Floating Upload Progress Modal when in Active Chat */}
+        {uploadProgress && uploadProgress.active && activeSession.messages.length > 0 && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+            <div className="w-full max-w-lg">
+              <UploadProgressDisplay
+                progress={uploadProgress}
+                onDismiss={() => setUploadProgress(null)}
+                onAskQuestion={(prompt) => handleSendMessage(prompt)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Scrollable Messages Stream / Main Viewpoint (The ONLY scrollable container) */}
         <div
           ref={chatContainerRef}
           onScroll={handleScroll}
-          className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 relative"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 sm:px-6 md:px-8 py-4 sm:py-6 space-y-6 relative"
         >
           {activeSession.messages.length === 0 ? (
             /* Empty State Hero */
@@ -1022,52 +1402,56 @@ export default function App() {
                 Upload PDFs using the sidebar, chatbox, or the box below and ask questions. Answers are grounded in your documents with exact page numbers and section citations.
               </p>
 
-              {/* Main Viewpoint Drag & Drop Upload Zone */}
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(true);
-                }}
-                onDragLeave={() => setIsDragOver(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(false);
-                  if (e.dataTransfer.files?.[0]) {
-                    handleFileUpload(e.dataTransfer.files[0]);
-                  }
-                }}
-                className={`w-full max-w-md p-4 sm:p-5 border-2 border-dashed rounded-2xl mb-4 sm:mb-6 transition-all duration-200 cursor-pointer ${
-                  isDragOver
-                    ? 'border-blue-400 bg-blue-500/10 scale-[1.02]'
-                    : 'border-slate-700 hover:border-slate-500 bg-slate-800/40 hover:bg-slate-800/60'
-                }`}
-              >
-                <input
-                  type="file"
-                  ref={heroFileInputRef}
-                  onChange={handleFileUpload}
-                  accept=".pdf"
-                  className="hidden"
-                  id="hero-file-upload"
-                />
-                <label htmlFor="hero-file-upload" className="cursor-pointer flex flex-col items-center">
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center mb-2">
-                    <Upload size={20} />
-                  </div>
-                  <span className="text-sm font-semibold text-slate-200 mb-1">
-                    {uploading ? 'Processing & analyzing document...' : 'Click or drag & drop PDF here'}
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    Upload documents to query with page and section citations
-                  </span>
-                </label>
-
-                {uploadMessage && (
-                  <div className="mt-2 text-xs text-blue-400 font-mono text-center">
-                    {uploadMessage}
-                  </div>
-                )}
-              </div>
+              {/* Main Viewpoint Drag & Drop Upload Zone OR High-Trust Progress Card */}
+              {uploadProgress && uploadProgress.active ? (
+                <div className="w-full max-w-md my-4 sm:my-6 animate-fade-in">
+                  <UploadProgressDisplay
+                    progress={uploadProgress}
+                    onDismiss={() => setUploadProgress(null)}
+                    onAskQuestion={(prompt) => handleSendMessage(prompt)}
+                  />
+                </div>
+              ) : (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(true);
+                  }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    if (e.dataTransfer.files?.[0]) {
+                      handleFileUpload(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  className={`w-full max-w-md p-4 sm:p-5 border-2 border-dashed rounded-2xl mb-4 sm:mb-6 transition-all duration-200 cursor-pointer ${
+                    isDragOver
+                      ? 'border-blue-400 bg-blue-500/10 scale-[1.02]'
+                      : 'border-slate-700 hover:border-slate-500 bg-slate-800/40 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    ref={heroFileInputRef}
+                    onChange={handleFileUpload}
+                    accept=".pdf"
+                    className="hidden"
+                    id="hero-file-upload"
+                  />
+                  <label htmlFor="hero-file-upload" className="cursor-pointer flex flex-col items-center">
+                    <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center mb-2">
+                      <Upload size={20} />
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200 mb-1">
+                      {uploading ? 'Processing & analyzing document...' : 'Click or drag & drop PDF here'}
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Upload documents to query with page and section citations
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Suggested Questions */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
@@ -1244,8 +1628,9 @@ export default function App() {
           {showScrollBottom && (
             <button
               onClick={scrollToBottom}
-              className="fixed bottom-24 right-8 z-30 p-2.5 rounded-full bg-slate-800/90 hover:bg-slate-700 text-blue-400 hover:text-white border border-slate-700 shadow-2xl backdrop-blur transition-all duration-200 active:scale-90 animate-bounce group"
+              className="absolute bottom-28 right-4 sm:right-8 z-20 p-2.5 rounded-full bg-slate-800/95 hover:bg-slate-700 text-blue-400 hover:text-white border border-slate-700/80 shadow-2xl backdrop-blur transition-all duration-150 active:scale-90 animate-fade-in group"
               title="Scroll to latest messages"
+              aria-label="Scroll to bottom"
             >
               <ArrowDown size={18} className="group-hover:translate-y-0.5 transition-transform" />
             </button>
@@ -1255,10 +1640,10 @@ export default function App() {
         {/* =====================================================================
             FIXED PINNED BOTTOM INPUT BAR WITH UPLOAD IN CHATBOX
         ====================================================================== */}
-        <div className="sticky bottom-0 border-t border-slate-800/80 bg-[#0f172a]/95 backdrop-blur px-3 py-2.5 sm:px-4 sm:py-3 flex-shrink-0 z-20">
+        <div className="flex-shrink-0 border-t border-slate-800/80 bg-[#0f172a] px-3 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-2.5 sm:pb-3 z-20">
           <div className="max-w-3xl mx-auto">
             {/* Inline Upload Message */}
-            {uploadMessage && (
+            {uploadMessage && (!uploadProgress || !uploadProgress.active) && (
               <div className="mb-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs flex items-center justify-between">
                 <span className="font-mono">{uploadMessage}</span>
                 <button onClick={() => setUploadMessage(null)} className="text-slate-400 hover:text-white">

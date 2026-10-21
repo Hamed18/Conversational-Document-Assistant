@@ -460,6 +460,13 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [activeDocument, setActiveDocument] = useState(() => {
+    try {
+      return localStorage.getItem('rag_active_document') || null;
+    } catch {
+      return null;
+    }
+  });
   const [selectedModel, setSelectedModel] = useState('auto');
   const [topK, setTopK] = useState(5);
   const [openCitations, setOpenCitations] = useState({});
@@ -498,6 +505,16 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // Persistence & Initialization
   // ---------------------------------------------------------------------------
+  useEffect(() => {
+    try {
+      if (activeDocument) {
+        localStorage.setItem('rag_active_document', activeDocument);
+      }
+    } catch (e) {
+      console.warn('Failed to persist active document:', e);
+    }
+  }, [activeDocument]);
+
   useEffect(() => {
     try {
       localStorage.setItem('rag_chat_sessions', JSON.stringify(sessions));
@@ -597,6 +614,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setDocuments(data);
+        if (data.length > 0) {
+          setActiveDocument((prev) => prev || data[0].filename);
+        }
       }
     } catch (e) {
       console.warn('Could not fetch documents:', e);
@@ -707,7 +727,30 @@ export default function App() {
         errorMessage: null,
       });
 
+      setActiveDocument(file.name);
       fetchDocuments();
+
+      // Record document active status in the current conversation stream
+      const documentReadyMessage = {
+        role: 'system',
+        type: 'document_loaded',
+        filename: file.name,
+        fileSize: formattedSize,
+        chunksCount: data.chunks_count || null,
+        timestamp: Date.now(),
+      };
+
+      setSessions((prev) => {
+        const currentId = activeSessionId || Object.keys(prev)[0];
+        const s = prev[currentId] || { messages: [] };
+        return {
+          ...prev,
+          [currentId]: {
+            ...s,
+            messages: [...s.messages, documentReadyMessage],
+          },
+        };
+      });
 
       // Keep success banner visible for 4.5 seconds so user has time to read
       setTimeout(() => {
@@ -750,6 +793,10 @@ export default function App() {
 
       setUploadMessage(`Removed ${filename}`);
       fetchDocuments();
+      if (activeDocument === filename) {
+        const remaining = documents.filter((d) => d.filename !== filename);
+        setActiveDocument(remaining.length > 0 ? remaining[0].filename : null);
+      }
       setTimeout(() => setUploadMessage(null), 3000);
     } catch (err) {
       alert(`Could not delete document: ${err.message}`);
@@ -1358,6 +1405,35 @@ export default function App() {
           </button>
         </header>
 
+        {/* Persistent Active Document Status Bar in Chat Viewpoint */}
+        {activeDocument && (
+          <div className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur px-3 sm:px-4 py-1.5 flex items-center justify-between text-xs select-none flex-shrink-0 z-20">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex h-2 w-2 relative flex-shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">Active Document:</span>
+              <div className="flex items-center gap-1.5 font-medium text-slate-100 truncate text-xs">
+                <FileText size={13} className="text-blue-400 flex-shrink-0" />
+                <span className="truncate max-w-[200px] sm:max-w-[340px] font-mono" title={activeDocument}>
+                  {activeDocument}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-slate-400 flex-shrink-0">
+              <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
+                Ready in Chat
+              </span>
+              {documents.length > 1 && (
+                <span className="text-slate-400 text-[10px]">
+                  ({documents.length} docs loaded)
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Floating Upload Progress Modal when in Active Chat */}
         {uploadProgress && uploadProgress.active && activeSession.messages.length > 0 && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
@@ -1402,7 +1478,7 @@ export default function App() {
                 Upload PDFs using the sidebar, chatbox, or the box below and ask questions. Answers are grounded in your documents with exact page numbers and section citations.
               </p>
 
-              {/* Main Viewpoint Drag & Drop Upload Zone OR High-Trust Progress Card */}
+              {/* Main Viewpoint Drag & Drop Upload Zone OR High-Trust Progress Card OR Active Document Card */}
               {uploadProgress && uploadProgress.active ? (
                 <div className="w-full max-w-md my-4 sm:my-6 animate-fade-in">
                   <UploadProgressDisplay
@@ -1410,6 +1486,69 @@ export default function App() {
                     onDismiss={() => setUploadProgress(null)}
                     onAskQuestion={(prompt) => handleSendMessage(prompt)}
                   />
+                </div>
+              ) : activeDocument ? (
+                /* Persistent Ingested Document Card in Viewpoint */
+                <div className="w-full max-w-md p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-[#162238] to-[#0d1527] border border-blue-500/40 shadow-xl shadow-blue-500/10 mb-4 sm:mb-6 animate-fade-in text-left">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-blue-600/25 text-blue-400 border border-blue-500/30 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <FileText size={20} className="text-blue-300" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-bold text-white truncate max-w-[210px] sm:max-w-[280px]" title={activeDocument}>
+                          {activeDocument}
+                        </h4>
+                        <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium mt-0.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>Document Active in Chat • Ready for queries</span>
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono text-[10px] font-semibold flex-shrink-0">
+                      100% Grounded
+                    </span>
+                  </div>
+
+                  {/* Quick Prompts Tailored to this Document */}
+                  <div className="space-y-1.5 pt-2.5 border-t border-slate-800/80">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">
+                      Start conversation with this document:
+                    </div>
+                    {[
+                      `Summarize the core takeaways of ${activeDocument}`,
+                      'What are the key technical concepts and findings?',
+                      'Extract all important dates, deadlines and metrics',
+                    ].map((prompt, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSendMessage(prompt)}
+                        className="w-full p-2.5 text-left rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-blue-500/50 text-xs text-slate-200 hover:text-white transition-all flex items-center justify-between group"
+                      >
+                        <span className="truncate">"{prompt}"</span>
+                        <ArrowRight size={13} className="text-blue-400 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all flex-shrink-0 ml-2" />
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Upload another PDF */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400">Want to query another document?</span>
+                    <label
+                      htmlFor="hero-file-upload-more"
+                      className="text-blue-400 hover:text-blue-300 font-medium cursor-pointer flex items-center gap-1 transition-colors"
+                    >
+                      <Upload size={12} />
+                      <span>Upload another PDF</span>
+                      <input
+                        type="file"
+                        onChange={handleFileUpload}
+                        accept=".pdf"
+                        className="hidden"
+                        id="hero-file-upload-more"
+                      />
+                    </label>
+                  </div>
                 </div>
               ) : (
                 <div
@@ -1474,6 +1613,56 @@ export default function App() {
             /* Message List */
             <div className="max-w-3xl mx-auto space-y-6">
               {activeSession.messages.map((msg, index) => {
+                // In-Stream Document Loaded Event Card
+                if (msg.role === 'system' && msg.type === 'document_loaded') {
+                  return (
+                    <div
+                      key={index}
+                      className="w-full max-w-xl mx-auto my-3 p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-950/70 via-slate-900 to-indigo-950/70 border border-blue-500/30 shadow-lg animate-fade-in select-none text-left"
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                            <FileText size={16} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-xs text-white truncate max-w-[200px] sm:max-w-[280px]" title={msg.filename}>
+                                {msg.filename}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-semibold border border-emerald-500/30 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                Active in Chat
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
+                              <span>{msg.fileSize}</span>
+                              <span>•</span>
+                              <span className="text-blue-300">{msg.chunksCount ? `${msg.chunksCount} chunks indexed` : 'Indexed & Grounded'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800/80 flex flex-wrap gap-1.5">
+                        {[
+                          `Summarize the core takeaways of ${msg.filename}`,
+                          'What are the key technical concepts described?',
+                          'Extract all important dates, deadlines and metrics',
+                        ].map((prompt, pIdx) => (
+                          <button
+                            key={pIdx}
+                            onClick={() => handleSendMessage(prompt)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-[11px] text-slate-300 hover:text-white border border-slate-700/60 hover:border-blue-500/40 transition-colors"
+                          >
+                            "{prompt}"
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
                 const isUser = msg.role === 'user';
                 return (
                   <div
@@ -1642,6 +1831,29 @@ export default function App() {
         ====================================================================== */}
         <div className="flex-shrink-0 border-t border-slate-800/80 bg-[#0f172a] px-3 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-2.5 sm:pb-3 z-20">
           <div className="max-w-3xl mx-auto">
+            {/* Active Document Context Pill Attached in Chat Input Viewpoint */}
+            {activeDocument && (
+              <div className="mb-2 flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs animate-fade-in select-none">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-5 h-5 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center flex-shrink-0">
+                    <FileText size={12} />
+                  </div>
+                  <span className="text-slate-200 font-medium truncate max-w-[190px] sm:max-w-[320px] text-xs font-mono">
+                    {activeDocument}
+                  </span>
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono flex-shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Document Attached
+                  </span>
+                </div>
+                {documents.length > 1 && (
+                  <span className="text-[10px] text-slate-400 flex-shrink-0 ml-2">
+                    +{documents.length - 1} more docs
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Inline Upload Message */}
             {uploadMessage && (!uploadProgress || !uploadProgress.active) && (
               <div className="mb-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs flex items-center justify-between">

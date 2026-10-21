@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from openai import OpenAI
 from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
@@ -82,9 +83,26 @@ def load_and_chunk_pdf(path: str) -> list[str]:
     return [c["text"] for c in chunks_meta]
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    response = client.embeddings.create(
-        model=EMBED_MODEL,
-        input=texts,
-    )
-    return [item.embedding for item in response.data]
+def embed_texts(texts: list[str], batch_size: int = 20) -> list[list[float]]:
+    """
+    Computes vector embeddings in batches of 20 chunks.
+    This maintains low memory consumption (preventing 512MB RAM exhaustion on Render)
+    and avoids network payload timeouts with large documents.
+    """
+    if not texts:
+        return []
+
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        response = client.embeddings.create(
+            model=EMBED_MODEL,
+            input=batch,
+        )
+        batch_vecs = [item.embedding for item in response.data]
+        all_embeddings.extend(batch_vecs)
+        # Yield brief timeslice to prevent CPU starvation on free-tier shared CPU
+        if i + batch_size < len(texts):
+            time.sleep(0.02)
+
+    return all_embeddings

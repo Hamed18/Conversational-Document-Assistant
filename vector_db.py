@@ -33,12 +33,20 @@ class QdrantStorage:
         except Exception:
             pass
 
-    def upsert(self, ids, vectors, payloads):
-        points = [
-            PointStruct(id=ids[i], vector=vectors[i], payload=payloads[i])
-            for i in range(len(ids))
-        ]
-        self.client.upsert(self.collection, points=points)
+    def upsert(self, ids, vectors, payloads, batch_size: int = 50):
+        """
+        Upserts vectors into Qdrant Cloud in manageable batches
+        to prevent large payload buffer spikes on memory-constrained servers.
+        """
+        for i in range(0, len(ids), batch_size):
+            batch_ids = ids[i : i + batch_size]
+            batch_vecs = vectors[i : i + batch_size]
+            batch_payloads = payloads[i : i + batch_size]
+            points = [
+                PointStruct(id=batch_ids[j], vector=batch_vecs[j], payload=batch_payloads[j])
+                for j in range(len(batch_ids))
+            ]
+            self.client.upsert(self.collection, points=points)
 
     def delete_by_source(self, source_id: str):
         """Removes all indexed points matching the given source filename."""

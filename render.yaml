@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: conversational-document-assistant
+    env: docker
+    plan: free
+    healthCheckPath: /health

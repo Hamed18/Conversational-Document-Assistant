@@ -286,8 +286,8 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
-@app.get("/api/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health_check():
     return {
         "status": "healthy",
@@ -316,11 +316,12 @@ def get_models():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
     try:
-        # 1. Execute grounded RAG query with distributed model fallback cascade
-        result = execute_query_cascade(
-            question=req.question,
-            top_k=req.top_k,
-            requested_model=req.model,
+        # 1. Execute grounded RAG query on worker thread so event loop remains free for health checks
+        result = await asyncio.to_thread(
+            execute_query_cascade,
+            req.question,
+            req.top_k,
+            req.model,
         )
 
         # 2. Asynchronously emit observability event to Inngest for live tracking
@@ -354,8 +355,13 @@ async def upload_document(file: UploadFile = File(...)):
     file_path.write_bytes(content)
 
     try:
-        # Ingest directly into Qdrant Cloud
-        chunks_count = process_and_ingest_pdf(str(file_path.resolve()), source_id=file.filename)
+        # Ingest directly into Qdrant Cloud on an isolated worker thread.
+        # This prevents blocking the asyncio event loop and ensures /health answers in < 2ms.
+        chunks_count = await asyncio.to_thread(
+            process_and_ingest_pdf,
+            str(file_path.resolve()),
+            file.filename,
+        )
 
         # Emit background event to Inngest for dashboard tracking
         asyncio.create_task(

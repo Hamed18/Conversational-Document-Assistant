@@ -313,6 +313,53 @@ def get_models():
     }
 
 
+@app.get("/api/inngest/overview")
+def inngest_overview():
+    """Observability endpoint providing Inngest workflow DAGs, triggers, and telemetry metadata."""
+    return {
+        "app_id": "rag_app",
+        "mode": "cloud" if IS_PRODUCTION else "development",
+        "is_production": IS_PRODUCTION,
+        "webhook_path": "/api/inngest",
+        "has_signing_key": bool(INNGEST_SIGNING_KEY),
+        "has_event_key": bool(INNGEST_EVENT_KEY),
+        "dashboard_url": "https://app.inngest.com/",
+        "functions": [
+            {
+                "id": "RAG: Ingest PDF",
+                "trigger_event": "rag/ingest_pdf",
+                "throttle": "2 runs / 1 minute",
+                "rate_limit": "1 run / 4 hours per document",
+                "steps": [
+                    {
+                        "step_id": "load-and-chunk",
+                        "title": "Document Parsing & Semantic Chunking",
+                        "description": "Extracts text, hierarchy, headings, and page offsets using LlamaIndex PDFReader",
+                    },
+                    {
+                        "step_id": "embed-and-upsert",
+                        "title": "Batch Embedding & Qdrant Upsert",
+                        "description": "Generates 1536-dim vectors via text-embedding-3-small (batched in 20 chunks) and upserts points to Qdrant Cloud",
+                    },
+                ],
+            },
+            {
+                "id": "RAG: Query PDF",
+                "trigger_event": "rag/query_pdf_ai",
+                "throttle": "Unrestricted (Real-time)",
+                "rate_limit": "None",
+                "steps": [
+                    {
+                        "step_id": "execute-rag-cascade",
+                        "title": "Cosine Retrieval & Multi-Engine Cascade",
+                        "description": "Searches top-K vector matches in Qdrant Cloud and queries Google Gemini 2.5 Flash with automatic failover to Qwen 2.5 72B and Nemotron 120B",
+                    },
+                ],
+            },
+        ],
+    }
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
     try:

@@ -33,6 +33,16 @@ class QdrantStorage:
         except Exception:
             pass
 
+        try:
+            # Create high-performance keyword index for tenant data isolation
+            self.client.create_payload_index(
+                collection_name=self.collection,
+                field_name="owner_id",
+                field_schema="keyword",
+            )
+        except Exception:
+            pass
+
     def upsert(self, ids, vectors, payloads, batch_size: int = 50):
         """
         Upserts vectors into Qdrant Cloud in manageable batches
@@ -48,8 +58,34 @@ class QdrantStorage:
             ]
             self.client.upsert(self.collection, points=points)
 
-    def delete_by_source(self, source_id: str):
-        """Removes all indexed points matching the given source filename."""
+    def delete_by_source(self, source_id: str, owner_id: str | None = None):
+        """Removes indexed points matching the source filename and tenant owner_id."""
+        must_conditions = [
+            FieldCondition(
+                key="source",
+                match=MatchValue(value=source_id),
+            )
+        ]
+        if owner_id:
+            must_conditions.append(
+                FieldCondition(
+                    key="owner_id",
+                    match=MatchValue(value=owner_id),
+                )
+            )
+
+        try:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=FilterSelector(
+                    filter=Filter(must=must_conditions)
+                ),
+            )
+        except Exception as e:
+            print(f"Warning: Failed to delete points for {source_id} (owner={owner_id}) from Qdrant: {e}")
+
+    def delete_all_for_owner(self, owner_id: str):
+        """Removes all indexed points belonging to a specific user or guest session."""
         try:
             self.client.delete(
                 collection_name=self.collection,
@@ -57,22 +93,38 @@ class QdrantStorage:
                     filter=Filter(
                         must=[
                             FieldCondition(
-                                key="source",
-                                match=MatchValue(value=source_id),
+                                key="owner_id",
+                                match=MatchValue(value=owner_id),
                             )
                         ]
                     )
                 ),
             )
         except Exception as e:
-            print(f"Warning: Failed to delete points for {source_id} from Qdrant: {e}")
+            print(f"Warning: Failed to delete all points for owner {owner_id} from Qdrant: {e}")
 
-    def search(self, query_vector, top_k: int = 5):
+    def search(self, query_vector, owner_id: str | None = None, top_k: int = 5):
+        """
+        Performs vector search strictly scoped to the specified tenant owner_id.
+        If owner_id is provided, vectors from other users or guests are NEVER retrieved.
+        """
+        query_filter = None
+        if owner_id:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="owner_id",
+                        match=MatchValue(value=owner_id),
+                    )
+                ]
+            )
+
         # Support modern qdrant query_points as well as search
         if hasattr(self.client, "query_points"):
             response = self.client.query_points(
                 collection_name=self.collection,
                 query=query_vector,
+                query_filter=query_filter,
                 with_payload=True,
                 limit=top_k,
             )
@@ -81,6 +133,7 @@ class QdrantStorage:
             results = self.client.search(
                 collection_name=self.collection,
                 query_vector=query_vector,
+                query_filter=query_filter,
                 with_payload=True,
                 limit=top_k,
             )

@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p /app/uploads
 
 # Copy application source code
-COPY main.py data_loader.py vector_db.py custom_types.py ./
+COPY main.py data_loader.py vector_db.py custom_types.py database.py auth.py ./
 
 EXPOSE 8000
 

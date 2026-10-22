@@ -51,7 +51,8 @@ import {
   LogIn,
   LogOut,
   Key,
-  Crown
+  Crown,
+  Brain
 } from 'lucide-react';
 
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -618,6 +619,324 @@ function AuthModal({ isOpen, onClose, onAuthSuccess, apiBase }) {
             )}
           </button>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// AI Agent Memory System & Profile Modal (Sean Chen Cognitive Architecture)
+// -----------------------------------------------------------------------------
+function ProfileMemoryModal({ isOpen, onClose, authUser, authToken, apiBase }) {
+  const [profile, setProfile] = useState(null);
+  const [historyCount, setHistoryCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [purgeResult, setPurgeResult] = useState(null);
+
+  const fetchProfileAndStats = async () => {
+    if (!authToken) return;
+    setLoading(true);
+    try {
+      const [profRes, histRes] = await Promise.all([
+        fetch(`${apiBase}/api/user/profile`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        }),
+        fetch(`${apiBase}/api/chat/history?limit=100`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        }),
+      ]);
+
+      if (profRes.ok) {
+        const profData = await profRes.json();
+        setProfile(profData);
+      }
+      if (histRes.ok) {
+        const histData = await histRes.json();
+        setHistoryCount(Array.isArray(histData) ? histData.length : 0);
+      }
+    } catch (err) {
+      console.warn('Failed to load memory profile:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchProfileAndStats();
+      setPurgeResult(null);
+    }
+  }, [isOpen, authToken]);
+
+  const handleConsolidateNow = async () => {
+    setConsolidating(true);
+    const toastId = toast.loading('Distilling episodic memory into semantic profile...');
+    try {
+      const res = await fetch(`${apiBase}/api/user/consolidate-memory`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Consolidation failed');
+
+      if (data.status === 'skipped') {
+        toast(data.message, { icon: 'ℹ️', id: toastId });
+      } else {
+        toast.success('Consolidation triggered via Inngest! Distilling facts...', { id: toastId });
+        setTimeout(() => fetchProfileAndStats(), 2500);
+      }
+    } catch (err) {
+      toast.error(err.message || 'Consolidation error', { id: toastId });
+    } finally {
+      setConsolidating(false);
+    }
+  };
+
+  const handlePurgeExpiredGuests = async () => {
+    setPurging(true);
+    const toastId = toast.loading('Running ephemeral guest TTL reaper...');
+    try {
+      const res = await fetch(`${apiBase}/api/admin/purge-expired-guests?max_age_hours=2`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Purge failed');
+      setPurgeResult(data);
+      toast.success(`TTL Reaper: Purged ${data.purged_guest_sessions} expired sessions.`, { id: toastId });
+    } catch (err) {
+      toast.error(err.message || 'Purge error', { id: toastId });
+    } finally {
+      setPurging(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in select-none">
+      <div className="w-full max-w-2xl bg-[#0d1526] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden relative text-left max-h-[90vh] flex flex-col">
+        {/* Ambient Glows */}
+        <div className="absolute -top-20 -left-20 w-44 h-44 bg-blue-600/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-20 -right-20 w-44 h-44 bg-purple-600/15 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Modal Header */}
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between relative z-10 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+              <Brain size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">AI Agent Memory System</h3>
+                <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 text-[10px] font-mono font-semibold">
+                  Sean Chen Architecture
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Cognitive memory partitioning (Procedural · Episodic · Semantic) with Inngest consolidation
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Modal Scrollable Body */}
+        <div className="p-5 overflow-y-auto space-y-4 relative z-10 flex-1">
+          {/* User Account Summary Card */}
+          <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                {authUser?.name ? authUser.name.charAt(0).toUpperCase() : 'U'}
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-white flex items-center gap-2">
+                  <span>{authUser?.name}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase ${
+                    authUser?.role === 'admin'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                  }`}>
+                    {authUser?.role}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 font-mono">{authUser?.email} • ID: {authUser?.id}</div>
+              </div>
+            </div>
+
+            <button
+              onClick={fetchProfileAndStats}
+              disabled={loading}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700/60"
+              title="Refresh Memory Profile"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {/* 3-Tier Cognitive Memory Breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Tier 1: Procedural Memory */}
+            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800/80 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
+                <ShieldCheck size={14} />
+                <span>Tier 1: Procedural Memory</span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Rules, protocols, and citation discipline. Injected into every LLM turn to enforce mandatory numeric page references (e.g. <span className="font-mono text-cyan-300">[1]</span>) and strict tenant data isolation.
+              </p>
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+                <Check size={12} className="text-emerald-400" />
+                <span>Zero-Leakage Multi-Tenant Filter Active</span>
+              </div>
+            </div>
+
+            {/* Tier 2: Episodic Memory */}
+            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800/80 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-indigo-400">
+                <MessageSquare size={14} />
+                <span>Tier 2: Episodic Memory</span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Timestamped multi-turn conversational history stored in Neon PostgreSQL. Recent Q&A turns are injected into working memory for conversational continuity.
+              </p>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[10px] text-slate-400 font-mono">Recorded History Turns:</span>
+                <span className="text-xs font-bold font-mono text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                  {historyCount} turns
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Tier 3: Semantic Memory (Consolidated Profile) */}
+          <div className="p-4 rounded-xl bg-gradient-to-b from-slate-900/90 to-[#0e1629] border border-blue-500/30 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles size={15} className="text-blue-400" />
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Tier 3: Semantic Memory (Distilled Profile)
+                </h4>
+              </div>
+              <button
+                onClick={handleConsolidateNow}
+                disabled={consolidating}
+                className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white text-[11px] font-medium transition-all shadow-sm active:scale-95"
+              >
+                {consolidating ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={12} />
+                )}
+                <span>Consolidate Memory Now</span>
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              Consolidation Gate distills high-frequency conversation turns into permanent facts, domain expertise, and research topics via background LLM reasoning.
+            </p>
+
+            {/* Profile Summary Box */}
+            <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800 space-y-2">
+              <span className="text-[10px] uppercase font-mono font-bold text-slate-400 tracking-wider block">
+                Distilled Research & Expertise Profile
+              </span>
+              <p className="text-xs text-slate-200 leading-relaxed italic">
+                {profile?.summary ? (
+                  `"${profile.summary}"`
+                ) : (
+                  <span className="text-slate-500 not-italic">
+                    No distilled profile yet. Start chatting about your documents, and the consolidation gate will automatically extract key concepts after 3-5 turns.
+                  </span>
+                )}
+              </p>
+
+              {/* Interests Tags */}
+              {profile?.interests && profile.interests.length > 0 && (
+                <div className="pt-1.5 border-t border-slate-800/80">
+                  <span className="text-[10px] font-mono text-slate-400 block mb-1.5">
+                    Recognized Focus Areas:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {profile.interests.map((topic, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 rounded-md bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[11px] font-medium"
+                      >
+                        {topic}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {profile?.last_consolidated && (
+                <div className="pt-1 text-[10px] font-mono text-slate-500 flex items-center justify-between">
+                  <span>Last consolidated: {new Date(profile.last_consolidated).toLocaleString()}</span>
+                  <span>Turns at consolidation: {profile.turn_count_at_last}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Phase 5: Admin Ephemeral TTL Reaper Controls */}
+          {authUser?.role === 'admin' && (
+            <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock size={15} className="text-purple-400" />
+                  <h4 className="text-xs font-bold text-purple-200 uppercase tracking-wider">
+                    Phase 5: Ephemeral Guest Session TTL Reaper
+                  </h4>
+                </div>
+                <button
+                  onClick={handlePurgeExpiredGuests}
+                  disabled={purging}
+                  className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-[11px] font-medium transition-all shadow-sm active:scale-95"
+                >
+                  {purging ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={12} />
+                  )}
+                  <span>Run Guest TTL Purge Now</span>
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Background daemon runs every 30 minutes on the server to enforce strict storage bounds. Guest sessions inactive for &gt;2 hours have their vector points in Qdrant, uploaded PDFs on disk, and chat turns automatically wiped.
+              </p>
+
+              {purgeResult && (
+                <div className="p-2.5 rounded-lg bg-purple-900/30 border border-purple-500/40 text-[11px] text-purple-200 flex items-center justify-between">
+                  <span>Purged {purgeResult.purged_guest_sessions} expired guest sessions.</span>
+                  <span className="font-mono text-[10px] text-purple-300">Cutoff: {purgeResult.max_age_hours}h</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer */}
+        <div className="p-4 border-t border-slate-800 bg-slate-900/50 flex items-center justify-between relative z-10 flex-shrink-0">
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <Database size={13} className="text-emerald-400" />
+            <span>Neon PostgreSQL Cloud + Qdrant Cloud Storage</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="py-1.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium transition-colors border border-slate-700/60"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1591,6 +1910,7 @@ export default function App() {
   });
 
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   const [guestSessionId, setGuestSessionId] = useState(() => {
     try {
@@ -2653,13 +2973,22 @@ export default function App() {
                   {authUser.role}
                 </span>
               </div>
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-rose-400 border border-slate-700/50 text-[11px] transition-colors"
-              >
-                <LogOut size={12} />
-                <span>Sign Out</span>
-              </button>
+              <div className="flex items-center gap-1.5 pt-0.5">
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white border border-blue-500/30 text-[11px] font-medium transition-colors"
+                >
+                  <Brain size={12} />
+                  <span>Agent Memory</span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  title="Sign Out"
+                  className="flex items-center justify-center p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-rose-400 border border-slate-700/50 text-[11px] transition-colors"
+                >
+                  <LogOut size={12} />
+                </button>
+              </div>
             </div>
           ) : (
             <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
@@ -3134,19 +3463,25 @@ export default function App() {
           <div className="flex items-center gap-2">
             {authUser ? (
               <div className="flex items-center gap-2 bg-slate-800/70 border border-slate-700/60 rounded-xl px-2.5 py-1 text-xs">
-                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-[10px]">
-                  {authUser.name ? authUser.name.charAt(0).toUpperCase() : 'U'}
-                </div>
-                <span className="text-white font-medium text-xs hidden sm:inline max-w-[100px] truncate">
-                  {authUser.name}
-                </span>
-                <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono font-bold uppercase ${
-                  authUser.role === 'admin'
-                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                    : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                }`}>
-                  {authUser.role}
-                </span>
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  className="flex items-center gap-2 hover:opacity-85 transition-opacity text-left"
+                  title="View AI Agent Memory & Profile"
+                >
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-[10px]">
+                    {authUser.name ? authUser.name.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                  <span className="text-white font-medium text-xs hidden sm:inline max-w-[100px] truncate">
+                    {authUser.name}
+                  </span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono font-bold uppercase ${
+                    authUser.role === 'admin'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                  }`}>
+                    {authUser.role}
+                  </span>
+                </button>
                 <button
                   onClick={handleLogout}
                   title="Sign Out"
@@ -3719,6 +4054,15 @@ export default function App() {
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
         onAuthSuccess={handleAuthSuccess}
+        apiBase={API_BASE}
+      />
+
+      {/* AI Agent Memory System & Profile Modal (Sean Chen Cognitive Architecture) */}
+      <ProfileMemoryModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        authUser={authUser}
+        authToken={authToken}
         apiBase={API_BASE}
       />
 

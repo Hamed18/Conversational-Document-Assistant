@@ -90,6 +90,26 @@ class ChatHistory(Base):
         }
 
 
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    owner_id = Column(String(64), primary_key=True, index=True)
+    summary = Column(Text, nullable=True)
+    interests = Column(Text, nullable=True)  # JSON string array
+    last_consolidated = Column(DateTime, default=datetime.datetime.utcnow)
+    turn_count_at_last = Column(Integer, default=0)
+
+    def to_dict(self):
+        import json
+        return {
+            "owner_id": self.owner_id,
+            "summary": self.summary,
+            "interests": json.loads(self.interests) if self.interests else [],
+            "last_consolidated": self.last_consolidated.isoformat() if self.last_consolidated else None,
+            "turn_count_at_last": self.turn_count_at_last,
+        }
+
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------

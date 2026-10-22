@@ -32,7 +32,7 @@ from auth import (
 )
 from custom_types import RAGChunkAndSrc, RAGSearchResult, RAGUpsertResult
 from data_loader import embed_texts, load_and_chunk_pdf, load_and_chunk_pdf_with_metadata
-from database import ChatHistory, GuestSession, User, get_db, init_db, SessionLocal
+from database import ChatHistory, GuestSession, User, UserProfile, get_db, init_db, SessionLocal
 from vector_db import QdrantStorage
 
 load_dotenv()
@@ -239,10 +239,30 @@ def execute_query_cascade(
     except Exception as e:
         logger.warning(f"Failed to fetch episodic chat history for working memory: {e}")
 
+    # -------------------------------------------------------------------------
+    # Semantic Memory: Distilled User Profile Context (Phase 6)
+    # -------------------------------------------------------------------------
+    profile_block = ""
+    try:
+        db = SessionLocal()
+        user_prof = db.query(UserProfile).filter(UserProfile.owner_id == owner_id).first()
+        db.close()
+        if user_prof and user_prof.summary:
+            profile_block = f"User Profile & Expertise Context:\n- Summary: {user_prof.summary}\n"
+            if user_prof.interests:
+                try:
+                    ints = json.loads(user_prof.interests)
+                    if ints:
+                        profile_block += f"- Key Focus Areas: {', '.join(ints)}\n"
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"Failed to fetch user semantic profile: {e}")
+
     context_block = "\n\n".join(f"- {c}" for c in found["contexts"])
     system_prompt = (
         "You are AskFiles AI, a precise, intelligent, and grounded document assistant adhering to academic research standards.\n"
-        "You have access to Episodic Memory of earlier turns in this conversation to maintain multi-turn context.\n"
+        "You have access to both Semantic User Profile memory and Episodic Conversation history to tailor explanations and maintain multi-turn continuity.\n"
         "MANDATORY CITATION RULES:\n"
         "1. After EVERY piece of information, claim, finding, or sentence you state from the document, you MUST append an inline numeric citation in brackets: [1], [2], [3], etc., citing the corresponding numbered context chunk (e.g. 'Support Vector Machines maximize the street width between opposite classes [1].').\n"
         "2. If multiple source chunks support a statement, combine them such as [1][2] or [1, 2].\n"
@@ -251,8 +271,10 @@ def execute_query_cascade(
     )
 
     conversation_prefix = ""
+    if profile_block:
+        conversation_prefix += f"{profile_block}\n"
     if history_block:
-        conversation_prefix = f"Recent Conversation Context (Episodic Memory):\n{history_block}\n\n---\n\n"
+        conversation_prefix += f"Recent Conversation Context (Episodic Memory):\n{history_block}\n\n---\n\n"
 
     user_content = (
         f"{conversation_prefix}"
@@ -369,6 +391,153 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
     return result
 
 
+@inngest_client.create_function(
+    fn_id="RAG: Consolidate Memory",
+    trigger=inngest.TriggerEvent(event="rag/consolidate_memory"),
+    throttle=inngest.Throttle(limit=2, period=datetime.timedelta(minutes=1)),
+)
+async def rag_consolidate_memory(ctx: inngest.Context):
+    """
+    Sean Chen's Memory Consolidation Gate:
+    Periodically distills episodic conversation history into high-level semantic user profiles.
+    """
+    owner_id = ctx.event.data["owner_id"]
+    user_name = ctx.event.data.get("user_name", "User")
+    turn_count = ctx.event.data.get("turn_count", 0)
+
+    # Step 1: Fetch recent conversation turns from Neon PostgreSQL
+    def _fetch_history(owner_id: str):
+        db = SessionLocal()
+        turns = (
+            db.query(ChatHistory)
+            .filter(ChatHistory.owner_id == owner_id)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(15)
+            .all()
+        )
+        db.close()
+        return [{"question": t.question, "answer": t.answer[:250]} for t in reversed(turns)]
+
+    turns_data = await ctx.step.run("fetch-episodic-turns", lambda: _fetch_history(owner_id))
+
+    # Step 2: Distill semantic facts using LLM
+    def _distill_profile(turns_data):
+        if not turns_data:
+            return {"summary": "", "interests": []}
+        dialogue = "\n".join([f"Q: {t['question']}\nA: {t['answer']}" for t in turns_data])
+        prompt = (
+            "You are an AI Memory Consolidation Engine following the cognitive architecture of human working and semantic memory.\n"
+            "Analyze the following recent conversation history between the user and assistant.\n"
+            "Extract and distill:\n"
+            "1. A concise, factual summary (2-3 sentences) characterizing the user's domain focus, key interests, questions, and research/technical preferences.\n"
+            "2. A JSON array of 3-5 core topical keywords.\n\n"
+            f"User Conversation Turns:\n{dialogue}\n\n"
+            "Respond STRICTLY in JSON format with keys 'summary' and 'interests'. Example:\n"
+            '{"summary": "The user is researching distributed streaming systems, focusing on Apache Kafka partition strategies and vector databases.", "interests": ["Distributed Systems", "Kafka", "Vector DB"]}'
+        )
+        openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        openrouter_base_url = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+        client = OpenAI(base_url=openrouter_base_url, api_key=openrouter_key, timeout=30.0)
+        res = client.chat.completions.create(
+            model="google/gemini-2.5-flash",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.1,
+        )
+        raw = res.choices[0].message.content or "{}"
+        try:
+            clean = raw.strip()
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            return json.loads(clean)
+        except Exception:
+            return {"summary": raw[:300], "interests": []}
+
+    distilled = await ctx.step.run("distill-semantic-profile", lambda: _distill_profile(turns_data))
+
+    # Step 3: Persist into user_profiles table in Neon
+    def _save_profile(owner_id, distilled, turn_count):
+        db = SessionLocal()
+        prof = db.query(UserProfile).filter(UserProfile.owner_id == owner_id).first()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        summary_text = distilled.get("summary", "")
+        interests_json = json.dumps(distilled.get("interests", []))
+        if not prof:
+            prof = UserProfile(
+                owner_id=owner_id,
+                summary=summary_text,
+                interests=interests_json,
+                last_consolidated=now,
+                turn_count_at_last=turn_count,
+            )
+            db.add(prof)
+        else:
+            prof.summary = summary_text
+            prof.interests = interests_json
+            prof.last_consolidated = now
+            prof.turn_count_at_last = turn_count
+        db.commit()
+        db.close()
+        return {"status": "saved", "owner_id": owner_id, "turn_count": turn_count}
+
+    result = await ctx.step.run("persist-semantic-profile", lambda: _save_profile(owner_id, distilled, turn_count))
+    return result
+
+
+# -----------------------------------------------------------------------------
+# Ephemeral Guest Session TTL Reaper (Phase 5)
+# -----------------------------------------------------------------------------
+def purge_expired_guest_sessions(max_age_hours: int = 2) -> int:
+    """
+    Deletes all temporary vectors, uploaded PDFs, and chat records
+    for guest sessions that have been idle for more than `max_age_hours`.
+    """
+    db = SessionLocal()
+    purged_count = 0
+    try:
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=max_age_hours)
+        expired = db.query(GuestSession).filter(GuestSession.last_seen < cutoff).all()
+
+        store = QdrantStorage()
+        for g in expired:
+            sid = g.session_id
+            # 1. Wipe vectors from Qdrant Cloud
+            store.delete_all_for_owner(sid)
+            # 2. Delete temporary uploads directory from filesystem
+            guest_dir = get_owner_storage_dir(sid)
+            if guest_dir.exists():
+                shutil.rmtree(guest_dir, ignore_errors=True)
+            # 3. Delete temporary episodic chat history
+            db.query(ChatHistory).filter(ChatHistory.owner_id == sid).delete()
+            # 4. Remove session tracker
+            db.delete(g)
+            purged_count += 1
+
+        db.commit()
+        if purged_count > 0:
+            logger.info(f"[TTL Reaper] Purged {purged_count} expired guest sessions older than {max_age_hours}h.")
+    except Exception as e:
+        logger.error(f"[TTL Reaper] Error executing guest session purge: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+    return purged_count
+
+
+async def guest_reaper_loop():
+    """Periodic background daemon running every 30 minutes to enforce ephemeral storage bounds."""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # 30 minutes
+            await asyncio.to_thread(purge_expired_guest_sessions, 2)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[TTL Reaper Loop] Unexpected error: {e}")
+            await asyncio.sleep(60)
+
+
 # -----------------------------------------------------------------------------
 # FastAPI Application & REST Endpoints
 # -----------------------------------------------------------------------------
@@ -382,6 +551,7 @@ app = FastAPI(
 @app.on_event("startup")
 def on_startup():
     bootstrap_default_admin()
+    asyncio.create_task(guest_reaper_loop())
 
 
 # CORS Middleware (Allows Vercel Frontend to communicate with Render Backend)
@@ -553,6 +723,29 @@ def inngest_overview(identity: IdentityContext = Depends(require_admin)):
                     },
                 ],
             },
+            {
+                "id": "RAG: Consolidate Memory",
+                "trigger_event": "rag/consolidate_memory",
+                "throttle": "2 runs / 1 minute",
+                "rate_limit": "None",
+                "steps": [
+                    {
+                        "step_id": "fetch-conversation-turns",
+                        "title": "Episodic History Ingestion",
+                        "description": "Retrieves recent episodic conversation turns from Neon PostgreSQL",
+                    },
+                    {
+                        "step_id": "distill-semantic-profile",
+                        "title": "LLM Semantic Distillation",
+                        "description": "Extracts durable user facts, domain expertise, and research preferences",
+                    },
+                    {
+                        "step_id": "persist-semantic-profile",
+                        "title": "Neon Memory Profile Upsert",
+                        "description": "Upserts consolidated semantic profile into user_profiles table for instant prompt working memory injection",
+                    },
+                ],
+            },
         ],
     }
 
@@ -609,7 +802,30 @@ async def chat_endpoint(
             logger.warning(f"Failed to record chat history turn: {db_err}")
             db.rollback()
 
-        # 3. Asynchronously emit observability event to Inngest for live tracking
+        # 3. Sean Chen Memory Consolidation Gate (Phase 6):
+        # Authenticated users trigger background distillation after accumulating new turns
+        if not identity.is_guest:
+            try:
+                total_turns = db.query(ChatHistory).filter(ChatHistory.owner_id == identity.id).count()
+                prof = db.query(UserProfile).filter(UserProfile.owner_id == identity.id).first()
+                last_turn = prof.turn_count_at_last if prof else 0
+                if total_turns >= 3 and (total_turns - last_turn) >= 5:
+                    logger.info(f"[Memory Gate] Triggering consolidation for {identity.id} (turns: {total_turns}, last: {last_turn})")
+                    asyncio.create_task(
+                        inngest_client.send(
+                            inngest.Event(
+                                name="rag/consolidate_memory",
+                                data={
+                                    "owner_id": identity.id,
+                                    "turn_count": total_turns,
+                                },
+                            )
+                        )
+                    )
+            except Exception as gate_err:
+                logger.warning(f"Failed to check memory consolidation gate: {gate_err}")
+
+        # 4. Asynchronously emit observability event to Inngest for live tracking
         asyncio.create_task(
             inngest_client.send(
                 inngest.Event(
@@ -659,6 +875,72 @@ def clear_chat_history(
     deleted = query.delete()
     db.commit()
     return {"status": "success", "deleted_count": deleted}
+
+
+# -----------------------------------------------------------------------------
+# Sean Chen Semantic Memory & Admin Maintenance Endpoints (Phases 5 & 6)
+# -----------------------------------------------------------------------------
+@app.get("/api/user/profile")
+def get_user_semantic_profile(
+    identity: IdentityContext = Depends(require_authenticated),
+    db: Session = Depends(get_db),
+):
+    """Retrieves the Sean Chen distilled semantic memory profile for the logged-in user."""
+    prof = db.query(UserProfile).filter(UserProfile.owner_id == identity.id).first()
+    if not prof:
+        return {
+            "owner_id": identity.id,
+            "summary": None,
+            "interests": [],
+            "last_consolidated": None,
+            "turn_count_at_last": 0,
+        }
+    return prof.to_dict()
+
+
+@app.post("/api/user/consolidate-memory")
+async def trigger_manual_memory_consolidation(
+    identity: IdentityContext = Depends(require_authenticated),
+    db: Session = Depends(get_db),
+):
+    """Manually triggers Inngest memory consolidation distillation for the current user."""
+    total_turns = db.query(ChatHistory).filter(ChatHistory.owner_id == identity.id).count()
+    if total_turns == 0:
+        return {
+            "status": "skipped",
+            "message": "No conversation history exists yet to distill.",
+            "turn_count": 0,
+        }
+
+    await inngest_client.send(
+        inngest.Event(
+            name="rag/consolidate_memory",
+            data={
+                "owner_id": identity.id,
+                "turn_count": total_turns,
+            },
+        )
+    )
+    return {
+        "status": "triggered",
+        "message": f"Memory consolidation triggered for {identity.id} across {total_turns} turns.",
+        "turn_count": total_turns,
+    }
+
+
+@app.post("/api/admin/purge-expired-guests")
+def manual_purge_guests(
+    max_age_hours: int = 2,
+    identity: IdentityContext = Depends(require_admin),
+):
+    """Admin-only manual trigger for Phase 5 TTL reaper."""
+    purged = purge_expired_guest_sessions(max_age_hours=max_age_hours)
+    return {
+        "status": "success",
+        "purged_guest_sessions": purged,
+        "max_age_hours": max_age_hours,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -741,4 +1023,4 @@ def delete_document(
 
 
 # Mount Inngest endpoint for production webhooks (/api/inngest)
-inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai])
+inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai, rag_consolidate_memory])

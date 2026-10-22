@@ -1,19 +1,31 @@
 import os
 import re
 import time
+import logging
+import httpx
 from openai import OpenAI
 from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger("uvicorn")
 
 api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
 base_url = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
 
+# Dedicated HTTP transport with explicit connect, read, and write timeouts
+# to prevent "ssl.SSLError: The write operation timed out" during batch uploads.
+http_client = httpx.Client(
+    timeout=httpx.Timeout(connect=15.0, read=90.0, write=90.0, pool=60.0),
+    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+)
+
 client = OpenAI(
     api_key=api_key,
     base_url=base_url,
+    http_client=http_client,
+    max_retries=3,
 )
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-large")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))
@@ -83,26 +95,110 @@ def load_and_chunk_pdf(path: str) -> list[str]:
     return [c["text"] for c in chunks_meta]
 
 
-def embed_texts(texts: list[str], batch_size: int = 20) -> list[list[float]]:
+def create_dynamic_batches(
+    texts: list[str],
+    max_batch_size: int = 15,
+    max_batch_chars: int = 12000,
+) -> list[list[str]]:
     """
-    Computes vector embeddings in batches of 20 chunks.
-    This maintains low memory consumption (preventing 512MB RAM exhaustion on Render)
-    and avoids network payload timeouts with large documents.
+    Groups chunks into dynamically sized batches considering both chunk count
+    and total character length.
+
+    - For small PDFs (1-5 pages): Packages all chunks in 1-2 rapid requests.
+    - For massive PDFs (100-500+ pages): Bounds payload size strictly below ~12KB
+      so that SSL write buffers never stall or time out.
+    """
+    batches = []
+    current_batch = []
+    current_chars = 0
+
+    for text in texts:
+        text_len = len(text)
+        # Flush batch if count limit reached OR adding this chunk exceeds character limit
+        if current_batch and (
+            len(current_batch) >= max_batch_size or
+            (current_chars + text_len) > max_batch_chars
+        ):
+            batches.append(current_batch)
+            current_batch = []
+            current_chars = 0
+
+        current_batch.append(text)
+        current_chars += text_len
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+def _embed_single_batch(batch: list[str]) -> list[list[float]]:
+    """Sends a single embedding request to the provider."""
+    response = client.embeddings.create(
+        model=EMBED_MODEL,
+        input=batch,
+    )
+    return [item.embedding for item in response.data]
+
+
+def _embed_batch_adaptive(batch: list[str], max_retries: int = 3) -> list[list[float]]:
+    """
+    Attempts to embed a batch with exponential backoff on write timeouts or network glitches.
+    If a batch persistently fails, adaptively halves the batch size and embeds recursively.
+    """
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return _embed_single_batch(batch)
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"[Embeddings] Batch attempt {attempt + 1}/{max_retries} failed ({len(batch)} chunks, "
+                f"{sum(len(t) for t in batch)} chars): {e}"
+            )
+            if attempt < max_retries - 1:
+                # Exponential backoff: 1.5s, 3.0s...
+                time.sleep(1.5 * (attempt + 1))
+
+    # If all retries failed and batch has more than 1 chunk, adaptively split in half!
+    if len(batch) > 1:
+        mid = len(batch) // 2
+        logger.info(
+            f"[Embeddings] Adaptive backoff: Splitting failing batch of {len(batch)} chunks "
+            f"into sub-batches of {mid} and {len(batch) - mid}."
+        )
+        left = _embed_batch_adaptive(batch[:mid], max_retries=2)
+        right = _embed_batch_adaptive(batch[mid:], max_retries=2)
+        return left + right
+
+    raise last_err
+
+
+def embed_texts(
+    texts: list[str],
+    max_batch_size: int = 15,
+    max_batch_chars: int = 12000,
+) -> list[list[float]]:
+    """
+    Computes vector embeddings using dynamic character-aware batching
+    and adaptive retry fallbacks.
+
+    Accommodates documents of all sizes (from 1-page receipts to 500+ page books)
+    without triggering 'The write operation timed out' or Render RAM exhaustion.
     """
     if not texts:
         return []
 
+    batches = create_dynamic_batches(texts, max_batch_size, max_batch_chars)
+    logger.info(f"[Embeddings] Processing {len(texts)} chunks across {len(batches)} dynamic batches.")
+
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        response = client.embeddings.create(
-            model=EMBED_MODEL,
-            input=batch,
-        )
-        batch_vecs = [item.embedding for item in response.data]
+    for idx, batch in enumerate(batches):
+        batch_vecs = _embed_batch_adaptive(batch)
         all_embeddings.extend(batch_vecs)
-        # Yield brief timeslice to prevent CPU starvation on free-tier shared CPU
-        if i + batch_size < len(texts):
-            time.sleep(0.02)
+
+        # Cooperative timeslice between batches to release CPU & socket buffers
+        if idx + 1 < len(batches):
+            time.sleep(0.04)
 
     return all_embeddings

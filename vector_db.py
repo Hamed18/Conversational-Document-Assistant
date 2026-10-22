@@ -18,7 +18,7 @@ class QdrantStorage:
         dim = dim or int(os.getenv("EMBED_DIM", "3072"))
 
         api_key = os.getenv("QDRANT_API_KEY")
-        self.client = QdrantClient(url=url, api_key=api_key, timeout=30, check_compatibility=False)
+        self.client = QdrantClient(url=url, api_key=api_key, timeout=60, check_compatibility=False)
         if not self.client.collection_exists(self.collection):
             self.client.create_collection(
                 collection_name=self.collection,

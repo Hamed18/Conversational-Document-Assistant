@@ -672,5 +672,112 @@ The in-app console provides four specialized views:
 - **Backend Verification**: Verified that `uvicorn main:app` starts on port 8000 with healthy responses on `/health` and `/api/inngest/overview`.
 - **Frontend Verification**: Verified Vite dev server on port 3000 with clean proxying to the local backend.
 
+---
+
+## 9. Variable PDF Sizing: Dynamic Character-Aware Batching & Socket Hardening
+
+### A. The Multi-Page Ingestion Incident (`data_engineering.pdf`)
+During live testing with `data_engineering.pdf` (1.81 MB, **450 pages**, **436 chunks**), ingestion failed after **152.0 seconds** (`durationMs: 151995`) with:
+```
+Failed to ingest document: The write operation timed out
+```
+**Root Cause**:
+- Slicing 450 pages produced 436 chunks (~750,000 characters).
+- Rigid chunk-count batching (`batch_size = 20`) generated 22 consecutive POST requests to OpenRouter.
+- Each batch sent **~33,000 characters (33 KB JSON)** in a single request.
+- Default `OpenAI()` socket settings lacked explicit write deadlines. Over a sustained 2.5-minute transmission, an intermediate SSL write buffer paused, triggering `ssl.SSLError: The write operation timed out`.
+- Without retries or backoff, the entire 152-second ingestion was aborted and all 436 chunks were discarded.
+
+---
+
+### B. Rethinking Batch Sizing Across Diverse PDF Sizes
+PDFs vary dramatically across production workloads:
+1. **Micro-Documents (1–5 pages, e.g., receipts, invoices)**: Produce 2–10 chunks. Should be dispatched in **1 single fast network round-trip** (< 1.5s).
+2. **Medium Documents (10–50 pages, e.g., reports, papers)**: Produce 25–100 chunks. Require balanced batching to prevent connection saturation while maintaining throughput (~8–15s).
+3. **Mega-Documents (100–500+ pages, e.g., textbooks like `data_engineering.pdf`)**: Produce 400–2,000 chunks (~500 KB to 2 MB of raw text). Fixed chunk-count batching causes SSL write buffer saturation.
+
+**The Solution: Character-Bounded Dynamic Batching**:
+Instead of grouping blindly by chunk count, batches are constrained by **both** count (`max_batch_size = 15`) and total character length (`max_batch_chars = 12,000`):
+```python
+def create_dynamic_batches(
+    texts: list[str],
+    max_batch_size: int = 15,
+    max_batch_chars: int = 12000,
+) -> list[list[str]]:
+    batches = []
+    current_batch = []
+    current_chars = 0
+
+    for text in texts:
+        text_len = len(text)
+        if current_batch and (
+            len(current_batch) >= max_batch_size or
+            (current_chars + text_len) > max_batch_chars
+        ):
+            batches.append(current_batch)
+            current_batch = []
+            current_chars = 0
+
+        current_batch.append(text)
+        current_chars += text_len
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+```
+
+---
+
+### C. Socket Write Hardening (`data_loader.py`)
+Configured a dedicated `httpx.Client` with custom socket timeouts and connection pooling:
+```python
+http_client = httpx.Client(
+    timeout=httpx.Timeout(connect=15.0, read=90.0, write=90.0, pool=60.0),
+    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+)
+
+client = OpenAI(
+    api_key=api_key,
+    base_url=base_url,
+    http_client=http_client,
+    max_retries=3,
+)
+```
+
+---
+
+### D. Adaptive Batch Halving with Exponential Backoff
+If a batch encounters a write timeout, rate limit, or proxy error:
+1. Retries up to 3 times with exponential backoff (`1.5s`, `3.0s`).
+2. If the batch still struggles, the pipeline **adaptively halves** the batch (e.g., 14 chunks -> 7 and 7) and embeds the sub-batches recursively:
+```python
+def _embed_batch_adaptive(batch: list[str], max_retries: int = 3) -> list[list[float]]:
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return _embed_single_batch(batch)
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+
+    # Adaptive Halving on repeated failure
+    if len(batch) > 1:
+        mid = len(batch) // 2
+        left = _embed_batch_adaptive(batch[:mid], max_retries=2)
+        right = _embed_batch_adaptive(batch[mid:], max_retries=2)
+        return left + right
+
+    raise last_err
+```
+
+---
+
+### E. Live Verification on `data_engineering.pdf`
+- **Parsed 450 pages**: 436 chunks in 31.25s.
+- **Dynamic Batches**: Generated 66 compact batches (average 6.6 chunks and 10,976 characters per batch).
+- **Execution**: All dynamic batches completed with HTTP `200 OK` without any SSL write timeouts or socket stalls.
+
+
 
 

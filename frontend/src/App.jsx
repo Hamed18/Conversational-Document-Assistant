@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import toast, { Toaster } from 'react-hot-toast';
 import {
   MessageSquare,
   Plus,
@@ -462,9 +463,11 @@ function InngestObservabilityModal({
     navigator.clipboard?.writeText(text);
     if (type === 'id') {
       setCopiedId(true);
+      toast.success('Trace ID copied to clipboard!');
       setTimeout(() => setCopiedId(false), 2000);
     } else {
       setCopiedJson(true);
+      toast.success('Payload JSON copied to clipboard!');
       setTimeout(() => setCopiedJson(false), 2000);
     }
   };
@@ -1573,6 +1576,7 @@ export default function App() {
 
   const probeInngestEndpoint = async () => {
     setProbingInngest(true);
+    const probeToastId = toast.loading('Probing Inngest webhook endpoint...');
     try {
       const res = await fetch(`${API_BASE}/api/inngest`);
       const data = await res.json().catch(() => null);
@@ -1582,6 +1586,11 @@ export default function App() {
         data: data,
         timestamp: Date.now(),
       });
+      if (res.ok) {
+        toast.success('Inngest Cloud Webhook is connected & operational!', { id: probeToastId });
+      } else {
+        toast.error(`Inngest endpoint returned status ${res.status}`, { id: probeToastId });
+      }
     } catch (err) {
       setInngestProbe({
         status: 0,
@@ -1589,6 +1598,7 @@ export default function App() {
         error: err.message,
         timestamp: Date.now(),
       });
+      toast.error(`Webhook probe failed: ${err.message}`, { id: probeToastId });
     } finally {
       setProbingInngest(false);
     }
@@ -1612,6 +1622,7 @@ export default function App() {
         : (file.size / 1024).toFixed(0) + ' KB';
 
     if (!file.name.toLowerCase().endsWith('.pdf')) {
+      toast.error('Only PDF documents are supported.', { id: 'file-type-err' });
       setUploadProgress({
         active: true,
         filename: file.name,
@@ -1625,6 +1636,9 @@ export default function App() {
     }
 
     setUploading(true);
+    const uploadToastId = `upload-${file.name}`;
+    toast.loading(`Processing "${file.name}" (${formattedSize})...`, { id: uploadToastId });
+
     setUploadProgress({
       active: true,
       filename: file.name,
@@ -1730,6 +1744,11 @@ export default function App() {
         errorMessage: null,
       });
 
+      toast.success(
+        `"${file.name}" indexed successfully! (${data.chunks_count || 'all'} chunks ready)`,
+        { id: uploadToastId, duration: 4000 }
+      );
+
       // Mark Inngest Trace Completed
       setObservabilityTraces((prev) =>
         prev.map((t) =>
@@ -1805,6 +1824,11 @@ export default function App() {
         errorMessage: err.message || 'Failed to process document',
       });
 
+      toast.error(
+        `Failed to ingest "${file.name}": ${err.message || 'Error'}`,
+        { id: uploadToastId, duration: 6000 }
+      );
+
       // Mark Inngest Trace Failed
       setObservabilityTraces((prev) =>
         prev.map((t) =>
@@ -1852,10 +1876,11 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || 'Failed to delete document');
       }
 
+      toast.success(`Removed "${filename}"`, { icon: '🗑️' });
       setUploadMessage(`Removed ${filename}`);
       fetchDocuments();
       if (activeDocument === filename) {
@@ -1864,7 +1889,7 @@ export default function App() {
       }
       setTimeout(() => setUploadMessage(null), 3000);
     } catch (err) {
-      alert(`Could not delete document: ${err.message}`);
+      toast.error(`Could not delete document: ${err.message}`);
     }
   };
 
@@ -1885,6 +1910,7 @@ export default function App() {
     if (isMobile) {
       setSidebarOpen(false);
     }
+    toast.success('Started a new conversation', { icon: '💬', duration: 2000 });
   };
 
   const handleDeleteChat = (e, id) => {
@@ -1914,6 +1940,7 @@ export default function App() {
         handleNewChat();
       }
     }
+    toast.success('Conversation removed', { icon: '🗑️', duration: 2000 });
   };
 
   const handleSendMessage = async (queryText = null) => {
@@ -2030,6 +2057,10 @@ export default function App() {
         )
       );
 
+      if (data.fallback_history && data.fallback_history.length > 0) {
+        toast(`Self-healed via model fallback: ${data.model_used}`, { icon: '🛡️', duration: 3500 });
+      }
+
       const assistantMessage = {
         role: 'assistant',
         content: data.answer || '(No answer returned)',
@@ -2052,6 +2083,8 @@ export default function App() {
         };
       });
     } catch (err) {
+      toast.error(`Error generating answer: ${err.message}`, { id: 'chat-query-err', duration: 5000 });
+
       // Mark Inngest Query Trace Failed
       setObservabilityTraces((prev) =>
         prev.map((t) =>
@@ -3158,6 +3191,45 @@ export default function App() {
         onRunProbe={probeInngestEndpoint}
         probing={probingInngest}
         apiBase={API_BASE}
+      />
+
+      {/* React Hot Toast Notifications Container */}
+      <Toaster
+        position="top-right"
+        gutter={8}
+        containerClassName="z-[99999]"
+        toastOptions={{
+          duration: 3500,
+          className: 'shadow-2xl text-xs font-sans font-medium',
+          style: {
+            background: '#090d16',
+            color: '#f8fafc',
+            border: '1px solid #1e293b',
+            borderRadius: '0.75rem',
+            padding: '10px 14px',
+            fontSize: '12px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6)',
+          },
+          success: {
+            iconTheme: {
+              primary: '#10b981',
+              secondary: '#090d16',
+            },
+            style: {
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#f43f5e',
+              secondary: '#090d16',
+            },
+            style: {
+              border: '1px solid rgba(244, 63, 94, 0.35)',
+            },
+            duration: 5000,
+          },
+        }}
       />
     </div>
   );

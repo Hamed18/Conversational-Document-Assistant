@@ -400,31 +400,74 @@ function renderWithCitations(children, msgIndex, msgSources, onCitationClick, co
         );
       });
     } else if (match[2]) {
-      // Legacy formatted citation [Source: ...]
-      const { filename, page, section, raw } = parseCitation(match[2]);
+      // Verbose citation [Source: ...], [filename.pdf, Page ...] normalized into a compact standard pill
+      const parsed = parseCitation(match[2]);
+      
+      // Attempt to map this document to an indexed source [1], [2], etc. from msgSources
+      let matchedIndex = null;
+      let matchedChunk = null;
+      if (msgSources && Array.isArray(msgSources)) {
+        const foundIdx = msgSources.findIndex((s, idx) => {
+          const p = parseCitation(s, idx + 1);
+          const sameFile = p.filename && parsed.filename && (
+            p.filename.toLowerCase() === parsed.filename.toLowerCase() ||
+            p.filename.toLowerCase().includes(parsed.filename.toLowerCase()) ||
+            parsed.filename.toLowerCase().includes(p.filename.toLowerCase())
+          );
+          const samePage = !parsed.page || !p.page || String(p.page) === String(parsed.page);
+          return sameFile && samePage;
+        });
+        if (foundIdx !== -1) {
+          matchedIndex = String(foundIdx + 1);
+        }
+      }
+
+      if (matchedIndex && contextChunks) {
+        matchedChunk = contextChunks.find((c) => String(c.id) === String(matchedIndex));
+      }
+
+      const displayNum = matchedIndex || (parsed.page ? `P.${parsed.page}` : 'Ref');
+      const tooltip = matchedIndex
+        ? getCitationTooltip(msgSources, matchedIndex)
+        : `Verified Citation: ${parsed.filename}${parsed.page ? ` (Page ${parsed.page})` : ''}${parsed.section ? ` - ${parsed.section}` : ''}`;
+
       parts.push(
-        <span
+        <button
           key={match.index}
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 my-0.5 rounded-lg bg-blue-950/80 border border-blue-500/40 text-blue-200 font-mono text-[11px] align-baseline shadow-sm hover:border-blue-400 hover:bg-blue-900/60 transition-colors select-none cursor-pointer"
-          title={`Verified Citation: ${raw}`}
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (onCitationClick) {
+              onCitationClick({
+                num: displayNum,
+                source: matchedChunk?.source || parsed.filename || 'Source Document',
+                page: matchedChunk?.page || parsed.page,
+                section: matchedChunk?.section || parsed.section,
+                text: matchedChunk?.text || null,
+                raw: tooltip,
+                msgIndex,
+              });
+            }
+          }}
+          className="inline-flex items-center justify-center min-w-[20px] h-[19px] px-1.5 mx-0.5 -mt-0.5 rounded-md bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 hover:text-blue-100 border border-blue-500/40 text-[11px] font-mono font-bold align-baseline transition-all duration-150 active:scale-95 cursor-pointer shadow-sm group hover:ring-2 hover:ring-blue-400/30 whitespace-nowrap select-none"
+          title={tooltip}
         >
-          <FileText size={11} className="text-blue-400 flex-shrink-0" />
-          <span className="font-semibold text-slate-100 truncate max-w-[150px]">{filename}</span>
-          {page && (
-            <span className="px-1.5 py-0.2 rounded bg-blue-600/30 text-blue-300 border border-blue-400/30 text-[10px] font-semibold">
-              P.{page}
-            </span>
-          )}
-          {section && section !== `Page ${page}` && (
-            <span className="px-1.5 py-0.2 rounded bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 text-[10px] truncate max-w-[130px]">
-              {section}
-            </span>
-          )}
-        </span>
+          [{displayNum}]
+        </button>
       );
     }
 
     lastIdx = regex.lastIndex;
+
+    // Mobile / Typography polish: if text immediately following a citation starts with space before punctuation,
+    // trim the leading space so punctuation attaches directly without wrapping onto an orphaned newline (e.g. "[1]." instead of "[1] .")
+    if (lastIdx < children.length && /^\s+([.,;:!?])/.test(children.substring(lastIdx))) {
+      const punctMatch = children.substring(lastIdx).match(/^\s+([.,;:!?])/);
+      if (punctMatch) {
+        lastIdx += punctMatch[0].length - 1;
+      }
+    }
   }
 
   if (lastIdx < children.length) {
@@ -2024,6 +2067,25 @@ function InngestObservabilityModal({
   );
 }
 
+// -----------------------------------------------------------------------------
+// Tenant-Scoped Storage Helper for Notes Studio
+// Isolates user notes from guest mode and prevents cross-account data leaks
+// -----------------------------------------------------------------------------
+function getTenantNotesStorage(user) {
+  try {
+    if (user && user.id) {
+      return {
+        storage: localStorage,
+        key: `askfiles_notes_user_${user.id}`,
+      };
+    }
+  } catch {}
+  return {
+    storage: sessionStorage,
+    key: 'askfiles_notes_guest',
+  };
+}
+
 export default function App() {
   // ---------------------------------------------------------------------------
   // State Management
@@ -2144,7 +2206,14 @@ export default function App() {
   const [selectedSources, setSelectedSources] = useState([]);
   const [pinnedNotes, setPinnedNotes] = useState(() => {
     try {
-      const saved = localStorage.getItem('askfiles_pinned_notes');
+      // Purge legacy un-scoped key from previous versions to eliminate old data leakage
+      localStorage.removeItem('askfiles_pinned_notes');
+
+      const token = localStorage.getItem('askfiles_token');
+      const rawUser = localStorage.getItem('askfiles_user');
+      const initialUser = token && rawUser ? JSON.parse(rawUser) : null;
+      const { storage, key } = getTenantNotesStorage(initialUser);
+      const saved = storage.getItem(key);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -2198,6 +2267,7 @@ export default function App() {
     localStorage.removeItem('askfiles_user');
     setAuthToken(null);
     setAuthUser(null);
+    setPinnedNotes([]); // Instantly purge in-memory notes on logout
     setInngestOverview(null);
     toast.success('Signed out. Switched to Guest Session.', { icon: '👋' });
     setTimeout(() => {
@@ -2217,6 +2287,10 @@ export default function App() {
         toast.success('Session documents & memory cleared!', { id: toastId });
         setDocuments([]);
         setActiveDocument(null);
+        try {
+          sessionStorage.removeItem('askfiles_notes_guest');
+        } catch {}
+        setPinnedNotes([]);
         handleNewChat();
       } else {
         toast.error('Failed to clear session', { id: toastId });
@@ -2377,14 +2451,30 @@ export default function App() {
     }
   };
 
-  // Synchronize pinned notes to localStorage
+  // Synchronize pinned notes to tenant-scoped storage (User vs Guest)
   useEffect(() => {
     try {
-      localStorage.setItem('askfiles_pinned_notes', JSON.stringify(pinnedNotes));
+      const { storage, key } = getTenantNotesStorage(authUser);
+      storage.setItem(key, JSON.stringify(pinnedNotes));
     } catch (e) {
       console.warn('Failed to persist pinned notes:', e);
     }
-  }, [pinnedNotes]);
+  }, [pinnedNotes, authUser?.id]);
+
+  // When switching between authenticated user and guest, restore the proper tenant's notes
+  useEffect(() => {
+    try {
+      const { storage, key } = getTenantNotesStorage(authUser);
+      const saved = storage.getItem(key);
+      if (saved) {
+        setPinnedNotes(JSON.parse(saved));
+      } else {
+        setPinnedNotes([]);
+      }
+    } catch {
+      setPinnedNotes([]);
+    }
+  }, [authUser?.id]);
 
   // Synchronize selective grounding sources with active documents
   useEffect(() => {

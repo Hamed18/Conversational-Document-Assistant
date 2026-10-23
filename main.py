@@ -401,8 +401,9 @@ def execute_query_cascade(
         "MANDATORY CITATION RULES:\n"
         "1. After EVERY piece of information, claim, finding, or sentence you state from the document, you MUST append an inline numeric citation in brackets: [1], [2], [3], etc., citing the corresponding numbered context chunk (e.g. 'Support Vector Machines maximize the street width between opposite classes [1].').\n"
         "2. If multiple source chunks support a statement, combine them such as [1][2] or [1, 2].\n"
-        "3. Use ONLY the numeric reference markers [1], [2], etc., corresponding to the numbered context chunks provided below. Do NOT write document filenames, page numbers, or raw URLs in the body text—they will be rendered automatically in the References layer at the bottom.\n"
-        "4. Rely ONLY on the provided context chunks. If the context does not answer the question, state that clearly."
+        "3. Use ONLY numeric reference markers like [1], [2], [3]. NEVER write document filenames, page numbers, section titles, or strings like [Source: ...], [data_engineering.pdf, Page 424] in the response body. All metadata will be rendered in interactive popovers and the References layer automatically.\n"
+        "4. Always attach the citation brackets directly to the fact or sentence without extraneous spaces before periods (e.g., write 'reliable log [1].' NEVER write 'reliable log [1] .').\n"
+        "5. Rely ONLY on the provided context chunks. If the context does not answer the question, state that clearly."
     )
 
     conversation_prefix = ""
@@ -415,7 +416,7 @@ def execute_query_cascade(
         f"{conversation_prefix}"
         f"Referenced Document Chunks:\n\n{context_block}\n\n"
         f"User Question: {question}\n\n"
-        "Provide a grounded, comprehensive answer. Cite every fact or sentence using numeric citations in brackets like [1], [2] matching the source numbers above. If the question refers to earlier conversation context, respond seamlessly while keeping all factual claims cited."
+        "Provide a grounded, comprehensive answer. Cite every fact using strictly numeric brackets like [1], [2] corresponding to the source numbers above. Never write filenames or page numbers in brackets in the body text."
     )
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")

@@ -4322,7 +4322,7 @@ export default function App() {
                             <span>•</span>
                             <button
                               onClick={() => {
-                                const currentMessages = currentSession.messages || [];
+                                const currentMessages = activeSession?.messages || [];
                                 const userQ = index > 0 && currentMessages[index - 1]?.role === 'user'
                                   ? currentMessages[index - 1].content
                                   : 'Document Query';

@@ -96,6 +96,10 @@ class IdentityContext(BaseModel):
     email: str | None = None
     name: str | None = None
 
+    @property
+    def is_guest(self) -> bool:
+        return self.role == "guest"
+
 
 # -----------------------------------------------------------------------------
 # Security Context Dependency

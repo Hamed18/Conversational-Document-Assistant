@@ -14,17 +14,16 @@ start "FastAPI Backend" /min .\.venv\Scripts\uvicorn.exe main:app --reload --por
 
 timeout /t 2 /nobreak >nul
 
-echo [3/4] Starting Inngest Dev Server on port 8288...
+echo [3/4] Starting React Frontend on port 3000...
+start "React Frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
+
+echo [4/4] Starting Inngest Dev Server on port 8288...
 start "Inngest Dev Server" /min npx inngest-cli dev -u http://127.0.0.1:8000/api/inngest --no-discovery
-
-timeout /t 2 /nobreak >nul
-
-echo [4/4] Starting Streamlit Chatbot on port 8501...
-start "Streamlit Chatbot" .\.venv\Scripts\streamlit.exe run streamlit_app.py --server.port 8501
 
 echo.
 echo All services launched!
-echo Chatbot: http://localhost:8501
-echo Observability Dashboard: http://localhost:8288
+echo Frontend:             http://localhost:3000
+echo FastAPI Backend Docs: http://localhost:8000/docs
+echo Inngest Dashboard:    http://localhost:8288
 echo.
 pause

@@ -13,6 +13,7 @@ class RAGUpsertResult(pydantic.BaseModel):
 class RAGSearchResult(pydantic.BaseModel):
     contexts: list[str]
     sources: list[str]
+    context_chunks: list[dict] = []
 
 
 class RAQQueryResult(pydantic.BaseModel):

@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue, FilterSelector
+from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue, MatchAny, FilterSelector
 
 load_dotenv()
 
@@ -103,21 +103,44 @@ class QdrantStorage:
         except Exception as e:
             print(f"Warning: Failed to delete all points for owner {owner_id} from Qdrant: {e}")
 
-    def search(self, query_vector, owner_id: str | None = None, top_k: int = 5):
+    def search(
+        self,
+        query_vector,
+        owner_id: str | None = None,
+        top_k: int = 5,
+        sources_filter: list[str] | None = None,
+    ):
         """
-        Performs vector search strictly scoped to the specified tenant owner_id.
+        Performs vector search strictly scoped to the specified tenant owner_id
+        and optionally restricted to a selective list of source documents (Selective Grounding).
         If owner_id is provided, vectors from other users or guests are NEVER retrieved.
         """
-        query_filter = None
+        must_conditions = []
         if owner_id:
-            query_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="owner_id",
-                        match=MatchValue(value=owner_id),
-                    )
-                ]
+            must_conditions.append(
+                FieldCondition(
+                    key="owner_id",
+                    match=MatchValue(value=owner_id),
+                )
             )
+
+        if sources_filter and len(sources_filter) > 0:
+            if len(sources_filter) == 1:
+                must_conditions.append(
+                    FieldCondition(
+                        key="source",
+                        match=MatchValue(value=sources_filter[0]),
+                    )
+                )
+            else:
+                must_conditions.append(
+                    FieldCondition(
+                        key="source",
+                        match=MatchAny(any=sources_filter),
+                    )
+                )
+
+        query_filter = Filter(must=must_conditions) if must_conditions else None
 
         # Support modern qdrant query_points as well as search
         if hasattr(self.client, "query_points"):
@@ -140,6 +163,7 @@ class QdrantStorage:
 
         contexts = []
         sources = []
+        context_chunks = []
         seen_sources = set()
 
         idx = 1
@@ -172,6 +196,14 @@ class QdrantStorage:
                     seen_sources.add(citation_label)
                     sources.append(citation_label)
 
+                context_chunks.append({
+                    "id": idx,
+                    "source": source,
+                    "page": page,
+                    "section": section,
+                    "text": text,
+                })
+
                 idx += 1
 
-        return {"contexts": contexts, "sources": sources}
+        return {"contexts": contexts, "sources": sources, "context_chunks": context_chunks}

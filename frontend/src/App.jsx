@@ -52,7 +52,10 @@ import {
   LogOut,
   Key,
   Crown,
-  Brain
+  Brain,
+  Bookmark,
+  Quote,
+  FileDown
 } from 'lucide-react';
 
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -339,10 +342,10 @@ function getCitationTooltip(sources, num) {
   return `Jump to Reference [${num}]`;
 }
 
-function renderWithCitations(children, msgIndex, msgSources, onCitationClick) {
+function renderWithCitations(children, msgIndex, msgSources, onCitationClick, contextChunks) {
   if (Array.isArray(children)) {
     return children.map((child, idx) => (
-      <React.Fragment key={idx}>{renderWithCitations(child, msgIndex, msgSources, onCitationClick)}</React.Fragment>
+      <React.Fragment key={idx}>{renderWithCitations(child, msgIndex, msgSources, onCitationClick, contextChunks)}</React.Fragment>
     ));
   }
   if (typeof children !== 'string') return children;
@@ -365,6 +368,11 @@ function renderWithCitations(children, msgIndex, msgSources, onCitationClick) {
       const nums = match[1].split(/,\s*/).map((n) => n.trim()).filter(Boolean);
       nums.forEach((num, nIdx) => {
         const tooltip = getCitationTooltip(msgSources, num);
+        const matchedChunk = (contextChunks || []).find((c) => String(c.id) === String(num));
+        const parsed = parseCitation(
+          (msgSources || []).find((s) => s.startsWith(`[${num}]`)) || `[${num}] Document`,
+          num
+        );
         parts.push(
           <button
             key={`${match.index}-${nIdx}`}
@@ -372,9 +380,19 @@ function renderWithCitations(children, msgIndex, msgSources, onCitationClick) {
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (onCitationClick) onCitationClick(msgIndex, num);
+              if (onCitationClick) {
+                onCitationClick({
+                  num,
+                  source: matchedChunk?.source || parsed.filename || 'Source Document',
+                  page: matchedChunk?.page || parsed.page,
+                  section: matchedChunk?.section || parsed.section,
+                  text: matchedChunk?.text || null,
+                  raw: tooltip,
+                  msgIndex,
+                });
+              }
             }}
-            className="inline-flex items-center justify-center min-w-[20px] h-[19px] px-1.5 mx-0.5 -mt-0.5 rounded-md bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 hover:text-blue-100 border border-blue-500/40 text-[11px] font-mono font-bold align-baseline transition-all duration-150 active:scale-95 cursor-pointer shadow-sm group"
+            className="inline-flex items-center justify-center min-w-[20px] h-[19px] px-1.5 mx-0.5 -mt-0.5 rounded-md bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 hover:text-blue-100 border border-blue-500/40 text-[11px] font-mono font-bold align-baseline transition-all duration-150 active:scale-95 cursor-pointer shadow-sm group hover:ring-2 hover:ring-blue-400/30"
             title={tooltip}
           >
             [{num}]
@@ -684,8 +702,11 @@ function ProfileMemoryModal({ isOpen, onClose, authUser, authToken, apiBase }) {
       if (data.status === 'skipped') {
         toast(data.message, { icon: 'ℹ️', id: toastId });
       } else {
-        toast.success('Consolidation triggered via Inngest! Distilling facts...', { id: toastId });
-        setTimeout(() => fetchProfileAndStats(), 2500);
+        if (data.profile) {
+          setProfile(data.profile);
+        }
+        toast.success('Cognitive memory consolidated! Semantic profile updated.', { id: toastId });
+        fetchProfileAndStats();
       }
     } catch (err) {
       toast.error(err.message || 'Consolidation error', { id: toastId });
@@ -936,6 +957,213 @@ function ProfileMemoryModal({ isOpen, onClose, authUser, authToken, apiBase }) {
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Interactive Citation Quote Popover (Google NotebookLM Verification Experience)
+// -----------------------------------------------------------------------------
+function CitationQuotePopover({ citation, onClose, onCopyQuote }) {
+  if (!citation) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in select-none">
+      <div className="w-full max-w-lg bg-[#0e172a] border border-blue-500/40 rounded-2xl shadow-2xl shadow-blue-500/10 overflow-hidden text-left relative animate-scale-in">
+        {/* Glow Effects */}
+        <div className="absolute -top-12 -left-12 w-32 h-32 bg-blue-500/15 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-indigo-500/15 rounded-full blur-2xl pointer-events-none" />
+
+        {/* Header */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between relative z-10 bg-slate-900/70">
+          <div className="flex items-center gap-2.5">
+            <span className="w-7 h-7 rounded-lg bg-blue-600/30 text-blue-300 border border-blue-500/40 font-mono text-xs font-bold flex items-center justify-center flex-shrink-0">
+              [{citation.num}]
+            </span>
+            <div className="min-w-0">
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Quote size={12} className="text-blue-400 flex-shrink-0" />
+                <span>Verified Source Citation</span>
+              </h4>
+              <p className="text-[11px] text-slate-400 font-mono truncate max-w-[280px] sm:max-w-[340px]">
+                {citation.source}
+                {citation.page ? ` • Page ${citation.page}` : ''}
+                {citation.section ? ` • ${citation.section}` : ''}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors flex-shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Verbatim Excerpt */}
+        <div className="p-4 max-h-[50vh] overflow-y-auto space-y-3 relative z-10">
+          <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-200 text-xs leading-relaxed font-serif italic border-l-4 border-l-blue-500 select-text">
+            "{citation.text || citation.raw || 'Extracted document chunk context.'}"
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-3.5 border-t border-slate-800 bg-slate-900/50 flex items-center justify-between relative z-10">
+          <span className="text-[10px] font-mono text-slate-400 flex items-center gap-1">
+            <Check size={12} className="text-emerald-400" /> Grounded Academic Citation
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onCopyQuote(citation.text || citation.raw)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors shadow-sm active:scale-95"
+            >
+              <Copy size={12} />
+              <span>Copy Excerpt</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors border border-slate-700/60"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Notes & Studio Slide-Over Canvas (Google NotebookLM Studio Equivalent)
+// -----------------------------------------------------------------------------
+function NotesStudioModal({ isOpen, onClose, notes, onAddNote, onDeleteNote, onExportNotes }) {
+  const [newNoteText, setNewNoteText] = useState('');
+
+  if (!isOpen) return null;
+
+  const handleCreate = (e) => {
+    e.preventDefault();
+    if (!newNoteText.trim()) return;
+    onAddNote({
+      id: 'note_' + Date.now().toString(36),
+      title: newNoteText.slice(0, 30) + (newNoteText.length > 30 ? '...' : ''),
+      content: newNoteText.trim(),
+      timestamp: Date.now(),
+      source: 'Scratchpad Note',
+    });
+    setNewNoteText('');
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-end p-0 bg-black/60 backdrop-blur-sm animate-fade-in select-none">
+      <div className="w-full max-w-md h-full bg-[#0d1526] border-l border-slate-700/80 shadow-2xl flex flex-col text-left animate-slide-in">
+        {/* Header */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/70 flex-shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center flex-shrink-0">
+              <Bookmark size={16} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                <span>Studio & Saved Notes</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-mono">
+                  {notes.length}
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-400">Pinned responses & custom scratchpad</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {notes.length > 0 && (
+              <button
+                onClick={onExportNotes}
+                title="Export all notes to Markdown"
+                className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <FileDown size={16} />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Add Note Form */}
+        <form onSubmit={handleCreate} className="p-3 border-b border-slate-800/80 bg-slate-900/30 flex-shrink-0">
+          <textarea
+            value={newNoteText}
+            onChange={(e) => setNewNoteText(e.target.value)}
+            placeholder="Write a scratchpad note or idea..."
+            rows={2}
+            className="w-full bg-slate-950/70 border border-slate-800 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+          />
+          <div className="flex justify-end mt-1.5">
+            <button
+              type="submit"
+              disabled={!newNoteText.trim()}
+              className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-[11px] font-medium transition-colors shadow-sm"
+            >
+              Add Note
+            </button>
+          </div>
+        </form>
+
+        {/* Notes List */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {notes.length === 0 ? (
+            <div className="text-center py-12 text-slate-500 text-xs space-y-2">
+              <Bookmark size={24} className="mx-auto text-slate-600" />
+              <p>No notes saved yet.</p>
+              <p className="text-[11px] text-slate-400">
+                Click <strong>"Save to Notes"</strong> under any AI answer or write in the scratchpad above.
+              </p>
+            </div>
+          ) : (
+            notes.map((note) => (
+              <div
+                key={note.id}
+                className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 transition-all space-y-2 group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-indigo-400 font-semibold uppercase">
+                    {note.source || 'Saved Note'}
+                  </span>
+                  <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(note.content);
+                        toast.success('Note copied to clipboard');
+                      }}
+                      title="Copy note"
+                      className="p-1 text-slate-400 hover:text-white rounded"
+                    >
+                      <Copy size={12} />
+                    </button>
+                    <button
+                      onClick={() => onDeleteNote(note.id)}
+                      title="Delete note"
+                      className="p-1 text-slate-400 hover:text-rose-400 rounded"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto select-text font-sans">
+                  {note.content}
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                  {new Date(note.timestamp).toLocaleString()}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -1912,6 +2140,20 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
 
+  // Selective Grounding, Studio Notes & Citation Popover States (NotebookLM Upgrades)
+  const [selectedSources, setSelectedSources] = useState([]);
+  const [pinnedNotes, setPinnedNotes] = useState(() => {
+    try {
+      const saved = localStorage.getItem('askfiles_pinned_notes');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showNotesDrawer, setShowNotesDrawer] = useState(false);
+  const [activeCitationPopover, setActiveCitationPopover] = useState(null);
+  const [loadingStage, setLoadingStage] = useState(0);
+
   const [guestSessionId, setGuestSessionId] = useState(() => {
     try {
       let saved = sessionStorage.getItem('askfiles_guest_id');
@@ -2133,6 +2375,98 @@ export default function App() {
         setHighlightedRef(null);
       }, 2500);
     }
+  };
+
+  // Synchronize pinned notes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('askfiles_pinned_notes', JSON.stringify(pinnedNotes));
+    } catch (e) {
+      console.warn('Failed to persist pinned notes:', e);
+    }
+  }, [pinnedNotes]);
+
+  // Synchronize selective grounding sources with active documents
+  useEffect(() => {
+    if (documents.length > 0) {
+      setSelectedSources((prev) => {
+        const valid = prev.filter((name) => documents.some((d) => d.filename === name));
+        return valid.length > 0 ? valid : documents.map((d) => d.filename);
+      });
+    } else {
+      setSelectedSources([]);
+    }
+  }, [documents]);
+
+  const toggleSourceSelection = (filename) => {
+    setSelectedSources((prev) => {
+      if (prev.includes(filename)) {
+        if (prev.length === 1) {
+          toast('At least 1 document must remain selected for grounding', { icon: 'ℹ️' });
+          return prev;
+        }
+        return prev.filter((f) => f !== filename);
+      } else {
+        return [...prev, filename];
+      }
+    });
+  };
+
+  const selectAllSources = () => {
+    setSelectedSources(documents.map((d) => d.filename));
+    toast.success('All documents active for grounding');
+  };
+
+  // Micro-stage progressive loading indicator timer (NotebookLM Style)
+  useEffect(() => {
+    let interval;
+    if (loading) {
+      setLoadingStage(0);
+      const start = Date.now();
+      interval = setInterval(() => {
+        const elapsed = Date.now() - start;
+        if (elapsed < 1200) {
+          setLoadingStage(0);
+        } else if (elapsed < 2600) {
+          setLoadingStage(1);
+        } else {
+          setLoadingStage(2);
+        }
+      }, 200);
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  const handleCitationClick = (citationObj) => {
+    setActiveCitationPopover(citationObj);
+    scrollToCitation(citationObj.msgIndex, citationObj.num);
+  };
+
+  const handlePinMessage = (msg, qText) => {
+    const newNote = {
+      id: 'note_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      title: qText ? qText.slice(0, 36) + '...' : 'Response Note',
+      content: `### Question:\n${qText || 'User Query'}\n\n### Answer:\n${msg.content}\n\n*Sources: ${(msg.sources || []).join(', ')}*`,
+      timestamp: Date.now(),
+      source: 'Pinned Response',
+    };
+    setPinnedNotes((prev) => [newNote, ...prev]);
+    toast.success('Saved to Studio Notes!', { icon: '📌', duration: 2500 });
+  };
+
+  const handleExportNotes = () => {
+    if (pinnedNotes.length === 0) return;
+    const markdown = pinnedNotes
+      .map((n) => `# ${n.title}\n*Saved: ${new Date(n.timestamp).toLocaleString()}*\n\n${n.content}\n\n---\n`)
+      .join('\n');
+    const blob = new Blob([markdown], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AskFiles-Studio-Notes-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Exported notes as Markdown file!', { icon: '📥' });
   };
 
   // ---------------------------------------------------------------------------
@@ -2761,6 +3095,7 @@ export default function App() {
           top_k: Number(topK),
           model: selectedModel !== 'auto' ? selectedModel : null,
           session_key: currentId,
+          selected_sources: selectedSources.length > 0 ? selectedSources : null,
         }),
       });
 
@@ -2812,6 +3147,9 @@ export default function App() {
         sources: data.sources || [],
         fallback_history: data.fallback_history || [],
         num_contexts: data.num_contexts || 0,
+        context_chunks: data.context_chunks || [],
+        suggested_followups: data.suggested_followups || [],
+        intent: data.intent || 'document_query',
         timestamp: Date.now(),
       };
 
@@ -3008,7 +3346,7 @@ export default function App() {
                   className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors shadow-sm active:scale-95"
                 >
                   <LogIn size={13} />
-                  <span>Sign In / Sign Up</span>
+                  <span>Sign In</span>
                 </button>
                 <button
                   onClick={handleClearSession}
@@ -3160,33 +3498,65 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                {/* Selective Grounding Header & Controls (NotebookLM Style) */}
+                {documents.length > 0 && (
+                  <div className="flex items-center justify-between px-1 py-1 text-[10px] text-slate-400 font-mono border-b border-slate-800 pb-1">
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span>{selectedSources.length} of {documents.length} Grounded</span>
+                    </span>
+                    {documents.length > 1 && (
+                      <button
+                        onClick={selectedSources.length === documents.length ? () => setSelectedSources([documents[0].filename]) : selectAllSources}
+                        className="text-blue-400 hover:text-blue-300 font-semibold cursor-pointer"
+                      >
+                        {selectedSources.length === documents.length ? 'Isolate First' : 'Select All'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
                   {documents.length === 0 ? (
                     <p className="text-[11px] text-slate-400 italic px-2 py-1">No PDFs uploaded yet.</p>
                   ) : (
-                    documents.map((doc, idx) => (
-                      <div
-                        key={idx}
-                        className="group flex items-center justify-between text-[11px] text-slate-300 bg-slate-800/50 hover:bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/40 transition-colors"
-                      >
-                        <div className="truncate pr-2 font-mono text-xs flex items-center gap-1.5">
-                          <FileText size={12} className="text-blue-400 flex-shrink-0" />
-                          <span className="truncate" title={doc.filename}>{doc.filename}</span>
+                    documents.map((doc, idx) => {
+                      const isSelected = selectedSources.includes(doc.filename);
+                      return (
+                        <div
+                          key={idx}
+                          className={`group flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg border transition-all ${
+                            isSelected
+                              ? 'text-slate-200 bg-slate-800/80 border-blue-500/30'
+                              : 'text-slate-500 bg-slate-900/40 border-slate-800/60 opacity-60'
+                          }`}
+                        >
+                          <div className="truncate pr-2 font-mono text-xs flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSourceSelection(doc.filename)}
+                              className="w-3.5 h-3.5 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer flex-shrink-0"
+                              title={isSelected ? 'Included in retrieval grounding' : 'Excluded from retrieval grounding'}
+                            />
+                            <FileText size={12} className={`${isSelected ? 'text-blue-400' : 'text-slate-500'} flex-shrink-0`} />
+                            <span className="truncate" title={doc.filename}>{doc.filename}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className="text-[10px] text-slate-400">
+                              {Math.round(doc.size_bytes / 1024)} KB
+                            </span>
+                            <button
+                              onClick={() => handleDeleteDocument(doc.filename)}
+                              className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-red-500/10 transition-colors"
+                              title={`Remove ${doc.filename}`}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <span className="text-[10px] text-slate-400">
-                            {Math.round(doc.size_bytes / 1024)} KB
-                          </span>
-                          <button
-                            onClick={() => handleDeleteDocument(doc.filename)}
-                            className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-red-500/10 transition-colors"
-                            title={`Remove ${doc.filename}`}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -3496,7 +3866,7 @@ export default function App() {
                 className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-xs transition-all shadow-md shadow-blue-600/20 active:scale-95"
               >
                 <LogIn size={13} />
-                <span>Sign In / Sign Up</span>
+                <span>Sign In</span>
               </button>
             )}
 
@@ -3509,8 +3879,43 @@ export default function App() {
               <Plus size={15} className="text-blue-400" />
               <span className="hidden sm:inline">New Chat</span>
             </button>
+
+            {/* Studio / Saved Notes Button (Google NotebookLM Feature) */}
+            <button
+              onClick={() => setShowNotesDrawer(true)}
+              className="flex items-center gap-1.5 py-1.5 px-2.5 sm:px-3 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-white border border-indigo-500/30 font-medium text-xs transition-all active:scale-95 shadow-sm"
+              title="Open Studio Notes & Scratchpad"
+              aria-label="Studio Notes"
+            >
+              <Bookmark size={14} className="text-indigo-400" />
+              <span className="hidden sm:inline">Studio</span>
+              {pinnedNotes.length > 0 && (
+                <span className="w-4 h-4 rounded-full bg-indigo-600 text-white font-mono text-[10px] font-bold flex items-center justify-center ml-0.5">
+                  {pinnedNotes.length}
+                </span>
+              )}
+            </button>
           </div>
         </header>
+
+        {/* Phase 4: Guest Expiration Warning Banner */}
+        {!authUser && (
+          <div className="bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border-b border-amber-500/20 px-3 sm:px-4 py-2 flex items-center justify-between text-xs text-amber-200 z-20">
+            <div className="flex items-center gap-2 min-w-0">
+              <Clock size={14} className="text-amber-400 flex-shrink-0" />
+              <span className="truncate">
+                <strong className="font-semibold text-amber-300">Guest Session:</strong> Ephemeral session (TTL: 2h).{' '}
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="underline hover:text-white font-medium text-amber-300 transition-colors focus:outline-none"
+                >
+                  Sign in
+                </button>{' '}
+                to persist documents &amp; chat memory permanently.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Persistent Active Document Status Bar in Chat Viewpoint */}
         {activeDocument && (
@@ -3794,13 +4199,13 @@ export default function App() {
                         <div className="prose prose-invert prose-sm max-w-none break-words">
                           <ReactMarkdown
                             components={{
-                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</p>,
-                              li: ({ children }) => <li className="leading-relaxed mb-1">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</li>,
-                              blockquote: ({ children }) => <blockquote className="border-l-4 border-blue-500/50 pl-3 italic my-2">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</blockquote>,
-                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h1>,
-                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h2>,
-                              h3: ({ children }) => <h3 className="text-base font-semibold mb-1 text-slate-100">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</h3>,
-                              td: ({ children }) => <td className="p-2 border border-slate-700">{renderWithCitations(children, index, msg.sources, scrollToCitation)}</td>,
+                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</p>,
+                              li: ({ children }) => <li className="leading-relaxed mb-1">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</li>,
+                              blockquote: ({ children }) => <blockquote className="border-l-4 border-blue-500/50 pl-3 italic my-2">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</blockquote>,
+                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</h1>,
+                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 text-slate-100">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</h2>,
+                              h3: ({ children }) => <h3 className="text-base font-semibold mb-1 text-slate-100">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</h3>,
+                              td: ({ children }) => <td className="p-2 border border-slate-700">{renderWithCitations(children, index, msg.sources, handleCitationClick, msg.context_chunks)}</td>,
                             }}
                           >
                             {msg.content}
@@ -3808,17 +4213,46 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Assistant Telemetry & Citations Footer */}
+                      {/* Assistant Telemetry, Action Bar & Citations Footer */}
                       {!isUser && (
                         <div className="mt-2 space-y-2">
-                          {/* Latency Display Only */}
-                          {msg.latency_ms > 0 && (
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                              <span className="font-mono">
-                                Response time: {(msg.latency_ms / 1000).toFixed(2)}s
-                              </span>
-                            </div>
-                          )}
+                          {/* Response Action Bar: Copy & Save to Notes Studio */}
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-0.5">
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(msg.content);
+                                toast.success('Response copied to clipboard');
+                              }}
+                              className="flex items-center gap-1 hover:text-white transition-colors cursor-pointer"
+                              title="Copy answer text"
+                            >
+                              <Copy size={12} />
+                              <span>Copy</span>
+                            </button>
+                            <span>•</span>
+                            <button
+                              onClick={() => {
+                                const currentMessages = currentSession.messages || [];
+                                const userQ = index > 0 && currentMessages[index - 1]?.role === 'user'
+                                  ? currentMessages[index - 1].content
+                                  : 'Document Query';
+                                handlePinMessage(msg, userQ);
+                              }}
+                              className="flex items-center gap-1 hover:text-indigo-300 transition-colors cursor-pointer"
+                              title="Save to Studio Notes (NotebookLM Style)"
+                            >
+                              <Bookmark size={12} className="text-indigo-400" />
+                              <span>Save Note</span>
+                            </button>
+                            {msg.latency_ms > 0 && (
+                              <>
+                                <span>•</span>
+                                <span className="font-mono text-[10px] text-slate-500">
+                                  {(msg.latency_ms / 1000).toFixed(2)}s
+                                </span>
+                              </>
+                            )}
+                          </div>
 
                           {/* Failover Alert if any */}
                           {msg.fallback_history && msg.fallback_history.length > 0 && (
@@ -3886,6 +4320,28 @@ export default function App() {
                               </div>
                             </div>
                           )}
+
+                          {/* Dynamic Suggested Follow-ups (Google NotebookLM Feature) */}
+                          {msg.suggested_followups && msg.suggested_followups.length > 0 && (
+                            <div className="mt-3 pt-2.5 border-t border-slate-700/50">
+                              <span className="text-[10px] font-mono uppercase font-bold text-slate-400 tracking-wider block mb-1.5 flex items-center gap-1.5">
+                                <Sparkles size={11} className="text-blue-400" />
+                                <span>Suggested Follow-ups</span>
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {msg.suggested_followups.map((followup, fIdx) => (
+                                  <button
+                                    key={fIdx}
+                                    onClick={() => handleSendMessage(followup)}
+                                    className="text-left text-xs text-blue-300 hover:text-white bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-400 rounded-xl px-2.5 py-1.5 transition-all duration-150 flex items-center gap-1.5 active:scale-95 shadow-sm cursor-pointer"
+                                  >
+                                    <span>"{followup}"</span>
+                                    <ArrowRight size={11} className="text-blue-400 flex-shrink-0" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3899,19 +4355,45 @@ export default function App() {
                 );
               })}
 
-              {/* Loading Indicator */}
+              {/* Micro-Stage Progressive Loading Progress Pill (Google NotebookLM Style) */}
               {loading && (
-                <div className="flex gap-3.5 animate-fade-in">
-                  <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                <div className="flex gap-3.5 animate-fade-in my-2">
+                  <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center flex-shrink-0 animate-pulse">
                     <Sparkles size={16} />
                   </div>
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-slate-400 flex items-center gap-2">
-                    <div className="flex gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <div className="bg-slate-900/95 border border-blue-500/40 rounded-2xl rounded-tl-none p-3.5 text-xs text-slate-300 max-w-sm shadow-xl shadow-blue-500/10 space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      {loadingStage === 0 ? (
+                        <Search size={14} className="text-blue-400 animate-spin" />
+                      ) : loadingStage === 1 ? (
+                        <Layers size={14} className="text-indigo-400 animate-pulse" />
+                      ) : (
+                        <Sparkles size={14} className="text-cyan-400 animate-bounce" />
+                      )}
+                      <span className="font-semibold text-white">
+                        {loadingStage === 0
+                          ? 'Searching document vector index...'
+                          : loadingStage === 1
+                          ? 'Analyzing relevant passages & citations...'
+                          : 'Synthesizing verified grounded response...'}
+                      </span>
                     </div>
-                    <span className="text-xs">Analyzing documents & formulating answer...</span>
+
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700/60">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400 rounded-full transition-all duration-300"
+                        style={{ width: `${(loadingStage + 1) * 33}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                      <span>
+                        {selectedSources.length === documents.length
+                          ? `Grounded in all ${documents.length} source(s)`
+                          : `Grounded in ${selectedSources.length} of ${documents.length} source(s)`}
+                      </span>
+                      <span className="text-blue-400 font-semibold">Stage {loadingStage + 1} of 3</span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -3938,25 +4420,30 @@ export default function App() {
         ====================================================================== */}
         <div className="flex-shrink-0 border-t border-slate-800/80 bg-[#0f172a] px-3 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-2.5 sm:pb-3 z-20">
           <div className="max-w-3xl mx-auto">
-            {/* Active Document Context Pill Attached in Chat Input Viewpoint */}
-            {activeDocument && (
-              <div className="mb-2 flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs animate-fade-in select-none">
+            {/* Active Document Context & Selective Grounding Pill in Chat Input Viewpoint */}
+            {documents.length > 0 && (
+              <div className="mb-2 flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs animate-fade-in select-none">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="w-5 h-5 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center flex-shrink-0">
                     <FileText size={12} />
                   </div>
-                  <span className="text-slate-200 font-medium truncate max-w-[190px] sm:max-w-[320px] text-xs font-mono">
-                    {activeDocument}
+                  <span className="text-slate-200 font-medium truncate max-w-[200px] sm:max-w-[340px] text-xs font-mono">
+                    {selectedSources.length === documents.length
+                      ? `All Documents (${documents.length}) Active`
+                      : `${selectedSources.length} of ${documents.length} Documents Selected`}
                   </span>
                   <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono flex-shrink-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Document Attached
+                    Grounded
                   </span>
                 </div>
-                {documents.length > 1 && (
-                  <span className="text-[10px] text-slate-400 flex-shrink-0 ml-2">
-                    +{documents.length - 1} more docs
-                  </span>
+                {documents.length > 1 && selectedSources.length < documents.length && (
+                  <button
+                    onClick={selectAllSources}
+                    className="text-[10px] text-blue-400 hover:text-blue-300 font-medium underline flex-shrink-0 ml-2 cursor-pointer"
+                  >
+                    Select All ({documents.length})
+                  </button>
                 )}
               </div>
             )}
@@ -4064,6 +4551,32 @@ export default function App() {
         authUser={authUser}
         authToken={authToken}
         apiBase={API_BASE}
+      />
+
+      {/* Interactive Citation Quote Popover (Google NotebookLM Verification Experience) */}
+      <CitationQuotePopover
+        citation={activeCitationPopover}
+        onClose={() => setActiveCitationPopover(null)}
+        onCopyQuote={(text) => {
+          navigator.clipboard.writeText(text);
+          toast.success('Citation excerpt copied!');
+        }}
+      />
+
+      {/* Notes & Studio Modal (Google NotebookLM Feature) */}
+      <NotesStudioModal
+        isOpen={showNotesDrawer}
+        onClose={() => setShowNotesDrawer(false)}
+        notes={pinnedNotes}
+        onAddNote={(note) => {
+          setPinnedNotes((prev) => [note, ...prev]);
+          toast.success('Note added to Studio!');
+        }}
+        onDeleteNote={(id) => {
+          setPinnedNotes((prev) => prev.filter((n) => n.id !== id));
+          toast.success('Note deleted');
+        }}
+        onExportNotes={handleExportNotes}
       />
 
       {/* React Hot Toast Notifications Container */}

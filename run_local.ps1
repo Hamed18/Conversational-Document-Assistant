@@ -21,12 +21,11 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; 
 
 Start-Sleep -Seconds 2
 
-# 4. Start Streamlit Chatbot
-Write-Host "[4/4] Starting Streamlit Chatbot on port 8501..." -ForegroundColor Green
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; .\.venv\Scripts\streamlit.exe run streamlit_app.py --server.port 8501"
+# 4. Start React Frontend (Vite)
+Write-Host "[4/4] Starting React Frontend on port 3000..." -ForegroundColor Green
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\frontend'; npm run dev"
 
 Write-Host "`nAll services successfully launched!" -ForegroundColor Yellow
-Write-Host "Chatbot URL:               http://localhost:8501" -ForegroundColor Cyan
-Write-Host "Inngest Observability URL: http://localhost:8288" -ForegroundColor Cyan
+Write-Host "Frontend Application URL:  http://localhost:3000" -ForegroundColor Cyan
 Write-Host "FastAPI Documentation URL: http://localhost:8000/docs" -ForegroundColor Cyan
-Write-Host "Qdrant Dashboard URL:      http://localhost:6333/dashboard" -ForegroundColor Cyan
+Write-Host "Inngest Observability URL: http://localhost:8288" -ForegroundColor Cyan

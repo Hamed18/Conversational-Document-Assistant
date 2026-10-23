@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import time
 import uuid
@@ -106,6 +107,7 @@ class ChatRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="Number of context chunks to retrieve")
     model: str | None = Field(None, description="Optional primary model override")
     session_key: str | None = Field(None, description="Frontend chat session ID for episodic tracking")
+    selected_sources: list[str] | None = Field(None, description="Optional list of source filenames to restrict retrieval to (Selective Grounding)")
 
 
 class FallbackAttempt(BaseModel):
@@ -115,6 +117,14 @@ class FallbackAttempt(BaseModel):
     latency_ms: float = 0.0
 
 
+class ContextChunkItem(BaseModel):
+    id: int
+    source: str
+    page: int | str | None = None
+    section: str | None = None
+    text: str
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
@@ -122,12 +132,40 @@ class ChatResponse(BaseModel):
     latency_ms: float
     fallback_history: list[FallbackAttempt] = []
     num_contexts: int
+    context_chunks: list[ContextChunkItem] = []
+    suggested_followups: list[str] = []
+    intent: str = "document_query"
 
 
 class DocumentInfo(BaseModel):
     filename: str
     size_bytes: int
     modified_at: float
+
+
+# -----------------------------------------------------------------------------
+# NotebookLM-Style Intent Classification
+# -----------------------------------------------------------------------------
+GREETING_PATTERNS = [
+    r"^\s*(hi|hello|hey|hiya|howdy|greetings|good\s+(morning|afternoon|evening|day)|sup|yo)\b",
+    r"^\s*(who\s+are\s+you|what\s+is\s+your\s+name)\b",
+]
+
+HELP_PATTERNS = [
+    r"^\s*(help|help\s+me|what\s+can\s+you\s+do|how\s+does\s+this\s+work|features|instructions|guide\s+me)\b",
+    r"^\s*(what\s+should\s+i\s+ask|how\s+to\s+use)\b",
+]
+
+
+def classify_user_intent(question: str) -> str:
+    cleaned = question.strip().lower()
+    for pattern in GREETING_PATTERNS:
+        if re.search(pattern, cleaned):
+            return "greeting"
+    for pattern in HELP_PATTERNS:
+        if re.search(pattern, cleaned):
+            return "help"
+    return "document_query"
 
 
 # -----------------------------------------------------------------------------
@@ -199,23 +237,120 @@ def execute_query_cascade(
     top_k: int = 5,
     requested_model: str | None = None,
     session_key: str | None = None,
+    selected_sources: list[str] | None = None,
 ) -> dict:
+    owner_dir = get_owner_storage_dir(owner_id)
+    available_files = [f.name for f in owner_dir.glob("*.pdf")]
+
+    intent = classify_user_intent(question)
+
+    # 1. Handle Conversational Greeting Intent (NotebookLM Standard)
+    if intent == "greeting":
+        if available_files:
+            file_list_str = ", ".join(f"`{f}`" for f in available_files[:3])
+            if len(available_files) > 3:
+                file_list_str += f" and {len(available_files) - 3} more"
+            return {
+                "answer": f"Hello! I am **AskFiles AI**, grounded in your uploaded documents ({file_list_str}).\n\nI can answer specific questions, synthesize cross-document themes, or generate executive summaries and study guides with interactive page citations.\n\nWhat would you like to explore?",
+                "sources": [],
+                "num_contexts": 0,
+                "model_used": "system (greeting router)",
+                "latency_ms": 1.0,
+                "fallback_history": [],
+                "context_chunks": [],
+                "suggested_followups": [
+                    "Give me an executive summary of my documents",
+                    "What are the key findings or data points?",
+                    "What methodology or approach is used?",
+                ],
+                "intent": "greeting",
+            }
+        else:
+            return {
+                "answer": "Hello! Welcome to **AskFiles AI**.\n\nPlease upload a PDF document using the sidebar or upload zone to get started. Once uploaded, I will index its content so you can ask questions, extract key findings, and verify assertions with interactive page citations.",
+                "sources": [],
+                "num_contexts": 0,
+                "model_used": "system (greeting router)",
+                "latency_ms": 1.0,
+                "fallback_history": [],
+                "context_chunks": [],
+                "suggested_followups": [
+                    "How do I upload a PDF?",
+                    "What file formats are supported?",
+                    "How does multi-tenant data privacy work?",
+                ],
+                "intent": "greeting",
+            }
+
+    # 2. Handle Help / Capabilities Intent (NotebookLM Standard)
+    if intent == "help":
+        active_str = f"your **{len(available_files)} active document(s)**" if available_files else "your documents (upload one to begin)"
+        return {
+            "answer": (
+                f"### What AskFiles AI Can Do With {active_str}:\n\n"
+                "• **Factual Question Answering**: Query anything in your files and receive answers grounded strictly in source passages, accompanied by interactive numeric citation badges (`[1]`, `[2]`).\n"
+                "• **Selective Document Grounding**: Use the checkboxes next to each document in the sidebar to isolate specific papers or search across your entire collection.\n"
+                "• **Interactive Verification**: Hover or click any citation pill to view the exact excerpt and page location directly from the PDF.\n"
+                "• **Synthesis & Summarization**: Ask for high-level briefings, comparative analyses, or structured FAQs.\n"
+                "• **Cognitive Memory**: Seamless multi-turn continuity (Episodic Memory) and automated background interest distillation (Semantic Memory).\n\n"
+                "Try clicking one of the suggested prompts below to start exploring!"
+            ),
+            "sources": [],
+            "num_contexts": 0,
+            "model_used": "system (help router)",
+            "latency_ms": 1.0,
+            "fallback_history": [],
+            "context_chunks": [],
+            "suggested_followups": [
+                "Summarize the central thesis or conclusion",
+                "Extract the top 5 key takeaways in bullet points",
+                "Are there any limitations or open challenges discussed?",
+            ],
+            "intent": "help",
+        }
+
+    # 3. Document Retrieval via Qdrant with Selective Grounding Filter
     store = QdrantStorage()
     query_vec = embed_texts([question])[0]
 
-    # Search strictly filtered to this owner's vectors
-    found = store.search(query_vec, owner_id=owner_id, top_k=top_k)
+    # Search strictly filtered to this owner's vectors (and optional selective sources)
+    found = store.search(
+        query_vec,
+        owner_id=owner_id,
+        top_k=top_k,
+        sources_filter=selected_sources,
+    )
 
     # If the user/guest has uploaded no documents in their namespace:
     if not found["contexts"]:
-        return {
-            "answer": "You haven't uploaded any documents in this session yet. Please upload a PDF document first so I can analyze, summarize, or extract insights with citations for you.",
-            "sources": [],
-            "num_contexts": 0,
-            "model_used": "system",
-            "latency_ms": 2.0,
-            "fallback_history": [],
-        }
+        if not available_files:
+            return {
+                "answer": "You haven't uploaded any documents in this session yet. Please upload a PDF document first so I can analyze, summarize, or extract insights with citations for you.",
+                "sources": [],
+                "num_contexts": 0,
+                "model_used": "system",
+                "latency_ms": 2.0,
+                "fallback_history": [],
+                "context_chunks": [],
+                "suggested_followups": ["How do I upload a document?"],
+                "intent": "out_of_domain",
+            }
+        else:
+            filter_note = f" among your {len(selected_sources)} selected document(s)" if selected_sources else ""
+            return {
+                "answer": f"The provided documents{filter_note} do not contain relevant information regarding this query.\n\nAskFiles strictly adheres to a **Zero-External-Hallucination Policy**—I am grounded exclusively in your active documents and do not invent facts outside of them.\n\nPlease try rephrasing your question or selecting additional sources in the sidebar.",
+                "sources": [],
+                "num_contexts": 0,
+                "model_used": "system (grounding guardrail)",
+                "latency_ms": 2.0,
+                "fallback_history": [],
+                "context_chunks": [],
+                "suggested_followups": [
+                    "What topics are covered in my documents?",
+                    "Provide a general overview of the uploaded files",
+                ],
+                "intent": "out_of_domain",
+            }
 
     # -------------------------------------------------------------------------
     # Episodic Memory: Working Context Injection (Sean Chen's Memory Architecture)
@@ -340,6 +475,13 @@ def execute_query_cascade(
         "model_used": model_used or "Unknown",
         "latency_ms": latency_ms,
         "fallback_history": fallback_history,
+        "context_chunks": found.get("context_chunks", []),
+        "suggested_followups": [
+            "Can you elaborate on this point with more detail?",
+            "What specific data or evidence supports this conclusion?",
+            "Summarize the key takeaways into bullet points",
+        ],
+        "intent": "document_query",
     }
 
 
@@ -391,6 +533,119 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
     return result
 
 
+# -----------------------------------------------------------------------------
+# Sean Chen Semantic Memory Consolidation Engine (Phase 6)
+# -----------------------------------------------------------------------------
+def distill_semantic_profile(turns_data: list[dict]) -> dict:
+    """
+    Cognitive memory distillation:
+    Extracts durable user facts, domain expertise, and core research interests using LLM.
+    """
+    if not turns_data:
+        return {"summary": "", "interests": []}
+
+    dialogue = "\n".join([f"Q: {t['question']}\nA: {t['answer']}" for t in turns_data])
+    prompt = (
+        "You are an AI Memory Consolidation Engine following the cognitive architecture of human working and semantic memory.\n"
+        "Analyze the following recent conversation history between the user and assistant.\n"
+        "Extract and distill:\n"
+        "1. A concise, factual summary (2-3 sentences) characterizing the user's domain focus, key interests, questions, and research/technical preferences.\n"
+        "2. A JSON array of 3-5 core topical keywords.\n\n"
+        f"User Conversation Turns:\n{dialogue}\n\n"
+        "Respond STRICTLY in JSON format with keys 'summary' and 'interests'. Example:\n"
+        '{"summary": "The user is researching distributed streaming systems, focusing on Apache Kafka partition strategies and vector databases.", "interests": ["Distributed Systems", "Kafka", "Vector DB"]}'
+    )
+    openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+    openrouter_base_url = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    client = OpenAI(base_url=openrouter_base_url, api_key=openrouter_key, timeout=30.0)
+
+    models_to_try = [
+        "google/gemini-2.5-flash",
+        "qwen/qwen-2.5-72b-instruct",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+    ]
+
+    for model_id in models_to_try:
+        try:
+            res = client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.1,
+            )
+            raw = (res.choices[0].message.content or "").strip()
+            if not raw:
+                continue
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            data = json.loads(raw)
+            if "summary" in data and "interests" in data:
+                return data
+        except Exception as e:
+            logger.warning(f"Distillation attempt failed on {model_id}: {e}")
+            continue
+
+    return {
+        "summary": "User actively researches uploaded document topics.",
+        "interests": ["Document Analysis", "Research"],
+    }
+
+
+def consolidate_user_memory(owner_id: str, turn_count: int | None = None) -> dict:
+    """
+    Sean Chen Cognitive Memory Consolidation:
+    Fetches recent episodic turns, distills durable user profile summary and interests via LLM,
+    and updates the user_profiles table in Neon PostgreSQL.
+    """
+    db = SessionLocal()
+    try:
+        turns = (
+            db.query(ChatHistory)
+            .filter(ChatHistory.owner_id == owner_id)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(15)
+            .all()
+        )
+        if not turns:
+            return {"summary": "", "interests": [], "turn_count": 0}
+
+        actual_turn_count = turn_count if turn_count is not None else len(turns)
+        turns_data = [{"question": t.question, "answer": t.answer[:250]} for t in reversed(turns)]
+
+        distilled = distill_semantic_profile(turns_data)
+
+        prof = db.query(UserProfile).filter(UserProfile.owner_id == owner_id).first()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        summary_text = distilled.get("summary", "")
+        interests_json = json.dumps(distilled.get("interests", []))
+
+        if not prof:
+            prof = UserProfile(
+                owner_id=owner_id,
+                summary=summary_text,
+                interests=interests_json,
+                last_consolidated=now,
+                turn_count_at_last=actual_turn_count,
+            )
+            db.add(prof)
+        else:
+            prof.summary = summary_text
+            prof.interests = interests_json
+            prof.last_consolidated = now
+            prof.turn_count_at_last = actual_turn_count
+
+        db.commit()
+        db.refresh(prof)
+        logger.info(f"Consolidated semantic memory profile for user {owner_id} ({actual_turn_count} turns)")
+        return prof.to_dict()
+    except Exception as e:
+        logger.error(f"Error in consolidate_user_memory for {owner_id}: {e}")
+        db.rollback()
+        return {"summary": "", "interests": [], "error": str(e)}
+    finally:
+        db.close()
+
+
 @inngest_client.create_function(
     fn_id="RAG: Consolidate Memory",
     trigger=inngest.TriggerEvent(event="rag/consolidate_memory"),
@@ -398,15 +653,13 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
 )
 async def rag_consolidate_memory(ctx: inngest.Context):
     """
-    Sean Chen's Memory Consolidation Gate:
-    Periodically distills episodic conversation history into high-level semantic user profiles.
+    Sean Chen's Memory Consolidation Gate (Inngest Workflow):
+    Distills episodic conversation history into high-level semantic user profiles across 3 steps.
     """
     owner_id = ctx.event.data["owner_id"]
-    user_name = ctx.event.data.get("user_name", "User")
     turn_count = ctx.event.data.get("turn_count", 0)
 
-    # Step 1: Fetch recent conversation turns from Neon PostgreSQL
-    def _fetch_history(owner_id: str):
+    def _fetch_history():
         db = SessionLocal()
         turns = (
             db.query(ChatHistory)
@@ -418,45 +671,10 @@ async def rag_consolidate_memory(ctx: inngest.Context):
         db.close()
         return [{"question": t.question, "answer": t.answer[:250]} for t in reversed(turns)]
 
-    turns_data = await ctx.step.run("fetch-episodic-turns", lambda: _fetch_history(owner_id))
+    turns_data = await ctx.step.run("fetch-episodic-turns", _fetch_history)
+    distilled = await ctx.step.run("distill-semantic-profile", lambda: distill_semantic_profile(turns_data))
 
-    # Step 2: Distill semantic facts using LLM
-    def _distill_profile(turns_data):
-        if not turns_data:
-            return {"summary": "", "interests": []}
-        dialogue = "\n".join([f"Q: {t['question']}\nA: {t['answer']}" for t in turns_data])
-        prompt = (
-            "You are an AI Memory Consolidation Engine following the cognitive architecture of human working and semantic memory.\n"
-            "Analyze the following recent conversation history between the user and assistant.\n"
-            "Extract and distill:\n"
-            "1. A concise, factual summary (2-3 sentences) characterizing the user's domain focus, key interests, questions, and research/technical preferences.\n"
-            "2. A JSON array of 3-5 core topical keywords.\n\n"
-            f"User Conversation Turns:\n{dialogue}\n\n"
-            "Respond STRICTLY in JSON format with keys 'summary' and 'interests'. Example:\n"
-            '{"summary": "The user is researching distributed streaming systems, focusing on Apache Kafka partition strategies and vector databases.", "interests": ["Distributed Systems", "Kafka", "Vector DB"]}'
-        )
-        openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        openrouter_base_url = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-        client = OpenAI(base_url=openrouter_base_url, api_key=openrouter_key, timeout=30.0)
-        res = client.chat.completions.create(
-            model="google/gemini-2.5-flash",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.1,
-        )
-        raw = res.choices[0].message.content or "{}"
-        try:
-            clean = raw.strip()
-            if clean.startswith("```"):
-                clean = clean.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            return json.loads(clean)
-        except Exception:
-            return {"summary": raw[:300], "interests": []}
-
-    distilled = await ctx.step.run("distill-semantic-profile", lambda: _distill_profile(turns_data))
-
-    # Step 3: Persist into user_profiles table in Neon
-    def _save_profile(owner_id, distilled, turn_count):
+    def _save():
         db = SessionLocal()
         prof = db.query(UserProfile).filter(UserProfile.owner_id == owner_id).first()
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -480,7 +698,7 @@ async def rag_consolidate_memory(ctx: inngest.Context):
         db.close()
         return {"status": "saved", "owner_id": owner_id, "turn_count": turn_count}
 
-    result = await ctx.step.run("persist-semantic-profile", lambda: _save_profile(owner_id, distilled, turn_count))
+    result = await ctx.step.run("persist-semantic-profile", _save)
     return result
 
 
@@ -525,6 +743,22 @@ def purge_expired_guest_sessions(max_age_hours: int = 2) -> int:
     return purged_count
 
 
+@inngest_client.create_function(
+    fn_id="Maintenance: Ephemeral TTL Reaper",
+    trigger=inngest.TriggerCron(cron="*/30 * * * *"),
+)
+async def rag_ttl_reaper(ctx: inngest.Context):
+    """
+    Phase 5 TTL Reaper (Inngest Periodic Cron Workflow):
+    Runs every 30 minutes to enforce strict storage bounds by purging idle guest data.
+    """
+    purged = await ctx.step.run(
+        "purge-idle-guests",
+        lambda: purge_expired_guest_sessions(max_age_hours=2),
+    )
+    return {"status": "success", "purged_guest_sessions": purged, "max_age_hours": 2}
+
+
 async def guest_reaper_loop():
     """Periodic background daemon running every 30 minutes to enforce ephemeral storage bounds."""
     while True:
@@ -549,8 +783,8 @@ app = FastAPI(
 
 # Startup Hook
 @app.on_event("startup")
-def on_startup():
-    bootstrap_default_admin()
+async def on_startup():
+    await asyncio.to_thread(bootstrap_default_admin)
     asyncio.create_task(guest_reaper_loop())
 
 
@@ -746,6 +980,19 @@ def inngest_overview(identity: IdentityContext = Depends(require_admin)):
                     },
                 ],
             },
+            {
+                "id": "Maintenance: Ephemeral TTL Reaper",
+                "trigger_event": "cron(*/30 * * * *)",
+                "throttle": "Periodic (Every 30 mins)",
+                "rate_limit": "None",
+                "steps": [
+                    {
+                        "step_id": "purge-idle-guests",
+                        "title": "Ephemeral Storage Boundary Enforcement",
+                        "description": "Purges Qdrant vector points, uploaded PDFs on disk, and chat history for guest sessions inactive for >2 hours",
+                    },
+                ],
+            },
         ],
     }
 
@@ -775,7 +1022,7 @@ async def chat_endpoint(
     db: Session = Depends(get_db),
 ):
     try:
-        # 1. Execute grounded RAG query strictly partitioned to the caller's owner_id with Episodic Working Memory
+        # 1. Execute grounded RAG query strictly partitioned to the caller's owner_id with Episodic Working Memory & Selective Grounding
         result = await asyncio.to_thread(
             execute_query_cascade,
             req.question,
@@ -783,6 +1030,7 @@ async def chat_endpoint(
             req.top_k,
             req.model,
             req.session_key,
+            req.selected_sources,
         )
 
         # 2. Record episodic chat history turn in Neon PostgreSQL
@@ -804,13 +1052,14 @@ async def chat_endpoint(
 
         # 3. Sean Chen Memory Consolidation Gate (Phase 6):
         # Authenticated users trigger background distillation after accumulating new turns
-        if not identity.is_guest:
+        if identity.is_authenticated:
             try:
                 total_turns = db.query(ChatHistory).filter(ChatHistory.owner_id == identity.id).count()
                 prof = db.query(UserProfile).filter(UserProfile.owner_id == identity.id).first()
                 last_turn = prof.turn_count_at_last if prof else 0
-                if total_turns >= 3 and (total_turns - last_turn) >= 5:
+                if (last_turn == 0 and total_turns >= 3) or (total_turns - last_turn) >= 5:
                     logger.info(f"[Memory Gate] Triggering consolidation for {identity.id} (turns: {total_turns}, last: {last_turn})")
+                    asyncio.create_task(asyncio.to_thread(consolidate_user_memory, identity.id, total_turns))
                     asyncio.create_task(
                         inngest_client.send(
                             inngest.Event(
@@ -903,7 +1152,7 @@ async def trigger_manual_memory_consolidation(
     identity: IdentityContext = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
-    """Manually triggers Inngest memory consolidation distillation for the current user."""
+    """Manually triggers Sean Chen memory consolidation distillation for the current user."""
     total_turns = db.query(ChatHistory).filter(ChatHistory.owner_id == identity.id).count()
     if total_turns == 0:
         return {
@@ -912,19 +1161,28 @@ async def trigger_manual_memory_consolidation(
             "turn_count": 0,
         }
 
-    await inngest_client.send(
-        inngest.Event(
-            name="rag/consolidate_memory",
-            data={
-                "owner_id": identity.id,
-                "turn_count": total_turns,
-            },
+    # Execute consolidation directly so user sees immediate results on UI
+    result = await asyncio.to_thread(consolidate_user_memory, identity.id, total_turns)
+
+    # Also emit Inngest telemetry event
+    try:
+        await inngest_client.send(
+            inngest.Event(
+                name="rag/consolidate_memory",
+                data={
+                    "owner_id": identity.id,
+                    "turn_count": total_turns,
+                },
+            )
         )
-    )
+    except Exception as e:
+        logger.warning(f"Failed to emit inngest consolidate_memory event: {e}")
+
     return {
-        "status": "triggered",
-        "message": f"Memory consolidation triggered for {identity.id} across {total_turns} turns.",
+        "status": "success",
+        "message": f"Memory consolidation completed for {identity.id} across {total_turns} turns.",
         "turn_count": total_turns,
+        "profile": result,
     }
 
 
@@ -1023,4 +1281,4 @@ def delete_document(
 
 
 # Mount Inngest endpoint for production webhooks (/api/inngest)
-inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai, rag_consolidate_memory])
+inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai, rag_consolidate_memory, rag_ttl_reaper])

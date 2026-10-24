@@ -2068,8 +2068,8 @@ function InngestObservabilityModal({
 }
 
 // -----------------------------------------------------------------------------
-// Tenant-Scoped Storage Helper for Notes Studio
-// Isolates user notes from guest mode and prevents cross-account data leaks
+// Tenant-Scoped Storage Helpers
+// Strictly isolates chat sessions, documents, and notes between users and guest mode
 // -----------------------------------------------------------------------------
 function getTenantNotesStorage(user) {
   try {
@@ -2086,61 +2086,97 @@ function getTenantNotesStorage(user) {
   };
 }
 
-export default function App() {
-  // ---------------------------------------------------------------------------
-  // State Management
-  // ---------------------------------------------------------------------------
-  const [sessions, setSessions] = useState(() => {
-    try {
-      let savedUser = null;
-      try {
-        savedUser = JSON.parse(localStorage.getItem('askfiles_user'));
-      } catch {}
-
-      const key = savedUser ? `rag_chat_sessions_${savedUser.id}` : 'rag_chat_sessions_guest';
-      const storage = savedUser ? localStorage : sessionStorage;
-      const saved = storage.getItem(key) || localStorage.getItem('rag_chat_sessions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const cleanSessions = {};
-        let emptyCount = 0;
-        Object.entries(parsed).forEach(([id, sess]) => {
-          if (!sess.messages || sess.messages.length === 0) {
-            emptyCount++;
-            if (emptyCount === 1) {
-              cleanSessions[id] = sess;
-            }
-          } else {
-            cleanSessions[id] = sess;
-          }
-        });
-        if (Object.keys(cleanSessions).length > 0) {
-          return cleanSessions;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved sessions:', e);
+function getTenantStorage(user) {
+  try {
+    if (user && user.id) {
+      return {
+        storage: localStorage,
+        sessionsKey: `rag_chat_sessions_user_${user.id}`,
+        activeSessionKey: `rag_active_session_id_user_${user.id}`,
+        activeDocKey: `rag_active_doc_user_${user.id}`,
+      };
     }
+  } catch {}
+  return {
+    storage: sessionStorage,
+    sessionsKey: 'rag_chat_sessions_guest',
+    activeSessionKey: 'rag_active_session_id_guest',
+    activeDocKey: 'rag_active_doc_guest',
+  };
+}
 
-    const defaultId = 'sess_' + Date.now();
-    return {
+function createDefaultSession() {
+  const defaultId = 'sess_' + Date.now();
+  return {
+    sessions: {
       [defaultId]: {
         id: defaultId,
         title: 'New Conversation',
         createdAt: Date.now(),
         messages: [],
       },
-    };
-  });
+    },
+    activeSessionId: defaultId,
+  };
+}
 
-  const [activeSessionId, setActiveSessionId] = useState(() => {
+function loadTenantSessions(user) {
+  try {
+    // Purge legacy un-scoped global keys from older versions to prevent cross-account leaks
+    localStorage.removeItem('rag_chat_sessions');
+    localStorage.removeItem('rag_active_session_id');
+    localStorage.removeItem('rag_active_document');
+
+    const { storage, sessionsKey, activeSessionKey } = getTenantStorage(user);
+    const saved = storage.getItem(sessionsKey);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      const cleanSessions = {};
+      let emptyCount = 0;
+      Object.entries(parsed).forEach(([id, sess]) => {
+        if (!sess.messages || sess.messages.length === 0) {
+          emptyCount++;
+          if (emptyCount === 1) {
+            cleanSessions[id] = sess;
+          }
+        } else {
+          cleanSessions[id] = sess;
+        }
+      });
+      if (Object.keys(cleanSessions).length > 0) {
+        const savedActiveId = storage.getItem(activeSessionKey);
+        const activeId = (savedActiveId && cleanSessions[savedActiveId])
+          ? savedActiveId
+          : Object.keys(cleanSessions)[0];
+        return { sessions: cleanSessions, activeSessionId: activeId };
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load tenant sessions:', e);
+  }
+  return createDefaultSession();
+}
+
+export default function App() {
+  // Determine initial authenticated user safely
+  const initialUser = (() => {
     try {
-      const savedId = localStorage.getItem('rag_active_session_id');
-      return savedId || null;
+      const token = localStorage.getItem('askfiles_token');
+      const rawUser = localStorage.getItem('askfiles_user');
+      return token && rawUser ? JSON.parse(rawUser) : null;
     } catch {
       return null;
     }
-  });
+  })();
+
+  const initialTenantData = loadTenantSessions(initialUser);
+
+  // ---------------------------------------------------------------------------
+  // State Management
+  // ---------------------------------------------------------------------------
+  const [sessions, setSessions] = useState(initialTenantData.sessions);
+  const [activeSessionId, setActiveSessionId] = useState(initialTenantData.activeSessionId);
+  const currentTenantIdRef = useRef(initialUser ? initialUser.id : 'guest');
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -2158,7 +2194,8 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [activeDocument, setActiveDocument] = useState(() => {
     try {
-      return localStorage.getItem('rag_active_document') || null;
+      const { storage, activeDocKey } = getTenantStorage(initialUser);
+      return storage.getItem(activeDocKey) || null;
     } catch {
       return null;
     }
@@ -2254,6 +2291,16 @@ export default function App() {
     localStorage.setItem('askfiles_user', JSON.stringify(data.user));
     setAuthToken(data.access_token);
     setAuthUser(data.user);
+
+    // Switch tenant ref immediately to the authenticated user and restore their sessions
+    currentTenantIdRef.current = data.user.id;
+    const userTenantData = loadTenantSessions(data.user);
+    setSessions(userTenantData.sessions);
+    setActiveSessionId(userTenantData.activeSessionId);
+
+    const { storage, activeDocKey } = getTenantStorage(data.user);
+    setActiveDocument(storage.getItem(activeDocKey) || null);
+
     setTimeout(() => {
       fetchDocuments();
       if (data.user?.role === 'admin') {
@@ -2269,6 +2316,16 @@ export default function App() {
     setAuthUser(null);
     setPinnedNotes([]); // Instantly purge in-memory notes on logout
     setInngestOverview(null);
+
+    // Instantly reset in-memory conversation, active session, and active document to clean guest state
+    currentTenantIdRef.current = 'guest';
+    const guestData = loadTenantSessions(null);
+    setSessions(guestData.sessions);
+    setActiveSessionId(guestData.activeSessionId);
+    setActiveDocument(null);
+    setDocuments([]);
+    setSelectedSources([]);
+
     toast.success('Signed out. Switched to Guest Session.', { icon: '👋' });
     setTimeout(() => {
       fetchDocuments();
@@ -2287,11 +2344,17 @@ export default function App() {
         toast.success('Session documents & memory cleared!', { id: toastId });
         setDocuments([]);
         setActiveDocument(null);
+        setSelectedSources([]);
         try {
           sessionStorage.removeItem('askfiles_notes_guest');
+          sessionStorage.removeItem('rag_chat_sessions_guest');
+          sessionStorage.removeItem('rag_active_session_id_guest');
+          sessionStorage.removeItem('rag_active_doc_guest');
         } catch {}
         setPinnedNotes([]);
-        handleNewChat();
+        const cleanGuest = createDefaultSession();
+        setSessions(cleanGuest.sessions);
+        setActiveSessionId(cleanGuest.activeSessionId);
       } else {
         toast.error('Failed to clear session', { id: toastId });
       }
@@ -2560,69 +2623,61 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // Persistence & Initialization
+  // Tenant-Scoped Persistence & Lifecycle Management
   // ---------------------------------------------------------------------------
+  // Persist active document scoped to tenant
   useEffect(() => {
+    const activeTenantId = authUser ? authUser.id : 'guest';
+    if (currentTenantIdRef.current !== activeTenantId) return;
     try {
+      const { storage, activeDocKey } = getTenantStorage(authUser);
       if (activeDocument) {
-        localStorage.setItem('rag_active_document', activeDocument);
+        storage.setItem(activeDocKey, activeDocument);
+      } else {
+        storage.removeItem(activeDocKey);
       }
     } catch (e) {
       console.warn('Failed to persist active document:', e);
     }
-  }, [activeDocument]);
+  }, [activeDocument, authUser?.id]);
 
-  // Tenant-scoped conversation persistence (Phase 2 & 3 Episodic Memory)
+  // Synchronize conversation sessions & active session ID strictly to the active tenant's storage
   useEffect(() => {
-    try {
-      const key = authUser ? `rag_chat_sessions_${authUser.id}` : 'rag_chat_sessions_guest';
-      const storage = authUser ? localStorage : sessionStorage;
-      storage.setItem(key, JSON.stringify(sessions));
-    } catch (e) {
-      console.warn('Failed to persist sessions:', e);
+    const activeTenantId = authUser ? authUser.id : 'guest';
+    // Guard: Only persist if the current in-memory sessions belongs to the active tenant
+    // (prevents logged-out or switched user chat history from poisoning the new tenant's storage)
+    if (currentTenantIdRef.current !== activeTenantId) {
+      return;
     }
-  }, [sessions, authUser?.id]);
-
-  // When switching user accounts or entering guest mode, restore that tenant's conversation history
-  useEffect(() => {
-    const key = authUser ? `rag_chat_sessions_${authUser.id}` : 'rag_chat_sessions_guest';
-    const storage = authUser ? localStorage : sessionStorage;
     try {
-      const saved = storage.getItem(key);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Object.keys(parsed).length > 0) {
-          setSessions(parsed);
-          const firstId = Object.keys(parsed)[0];
-          setActiveSessionId(firstId);
-          return;
-        }
+      const { storage, sessionsKey, activeSessionKey } = getTenantStorage(authUser);
+      storage.setItem(sessionsKey, JSON.stringify(sessions));
+      if (activeSessionId) {
+        storage.setItem(activeSessionKey, activeSessionId);
       }
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to persist tenant sessions:', e);
+    }
+  }, [sessions, activeSessionId, authUser?.id]);
 
-    const defaultId = 'sess_' + Date.now();
-    setSessions({
-      [defaultId]: {
-        id: defaultId,
-        title: 'New Conversation',
-        createdAt: Date.now(),
-        messages: [],
-      },
-    });
-    setActiveSessionId(defaultId);
+  // When switching between authenticated users or guest mode, restore that tenant's conversation history
+  useEffect(() => {
+    const newTenantId = authUser ? authUser.id : 'guest';
+    if (currentTenantIdRef.current === newTenantId) {
+      return;
+    }
+    // Update tenant ref immediately before state update
+    currentTenantIdRef.current = newTenantId;
+
+    const { sessions: loadedSessions, activeSessionId: loadedActiveId } = loadTenantSessions(authUser);
+    setSessions(loadedSessions);
+    setActiveSessionId(loadedActiveId);
+
+    const { storage, activeDocKey } = getTenantStorage(authUser);
+    setActiveDocument(storage.getItem(activeDocKey) || null);
   }, [authUser?.id]);
 
-  useEffect(() => {
-    try {
-      if (activeSessionId) {
-        localStorage.setItem('rag_active_session_id', activeSessionId);
-      }
-    } catch (e) {
-      console.warn('Failed to persist active session ID:', e);
-    }
-  }, [activeSessionId]);
-
-  // Ensure active session exists on initial load
+  // Ensure active session exists on initial load or session deletion
   useEffect(() => {
     const sessionKeys = Object.keys(sessions);
     if (!activeSessionId || !sessions[activeSessionId]) {
@@ -2631,7 +2686,7 @@ export default function App() {
         setActiveSessionId(sorted[0]);
       }
     }
-  }, []);
+  }, [sessions, activeSessionId]);
 
   // Fetch documents, health, and inngest overview on mount
   useEffect(() => {

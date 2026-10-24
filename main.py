@@ -184,7 +184,7 @@ def get_fallback_models(requested_model: str | None = None) -> list[tuple[str, s
     default_chain = [
         ("gemini-flash", "google/gemini-2.5-flash", "Google Gemini 2.5 Flash"),
         ("qwen-72b", "qwen/qwen-2.5-72b-instruct", "Qwen 2.5 72B Instruct"),
-        ("nemotron-120b", "nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA Nemotron 120B"),
+        ("nemotron-ultra", "nvidia/nemotron-3-ultra-550b-a55b:free", "NVIDIA Nemotron 3 Ultra"),
     ]
     raw = os.getenv("MODEL_FALLBACK_CHAIN", "")
     if raw.strip():
@@ -193,6 +193,7 @@ def get_fallback_models(requested_model: str | None = None) -> list[tuple[str, s
         name_map = {
             "google/gemini-2.5-flash": "Google Gemini 2.5 Flash",
             "qwen/qwen-2.5-72b-instruct": "Qwen 2.5 72B Instruct",
+            "nvidia/nemotron-3-ultra-550b-a55b:free": "NVIDIA Nemotron 3 Ultra",
             "nvidia/nemotron-3-super-120b-a12b:free": "NVIDIA Nemotron 120B",
         }
         for m in models:
@@ -579,7 +580,7 @@ def distill_semantic_profile(turns_data: list[dict]) -> dict:
     models_to_try = [
         "google/gemini-2.5-flash",
         "qwen/qwen-2.5-72b-instruct",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
     ]
 
     for model_id in models_to_try:
@@ -1019,12 +1020,12 @@ def get_models():
     return {
         "primary": os.getenv("MODEL_PRIMARY", "google/gemini-2.5-flash"),
         "fallback_1": os.getenv("MODEL_FALLBACK_1", "qwen/qwen-2.5-72b-instruct"),
-        "fallback_2": os.getenv("MODEL_FALLBACK_2", "nvidia/nemotron-3-super-120b-a12b:free"),
+        "fallback_2": os.getenv("MODEL_FALLBACK_2", "nvidia/nemotron-3-ultra-550b-a55b:free"),
         "models": [
-            {"id": "auto", "label": "Auto: Gemini Flash ➜ Qwen 2.5 ➜ Nemotron 120B"},
+            {"id": "auto", "label": "Auto: Gemini Flash ➜ Qwen 2.5 ➜ Nemotron Ultra"},
             {"id": "google/gemini-2.5-flash", "label": "Google Gemini 2.5 Flash (Tier 1 - Low Latency)"},
             {"id": "qwen/qwen-2.5-72b-instruct", "label": "Qwen 2.5 72B Instruct (Tier 2 - Reasoning)"},
-            {"id": "nvidia/nemotron-3-super-120b-a12b:free", "label": "NVIDIA Nemotron 120B (Tier 3 - Free Tier)"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "label": "NVIDIA Nemotron 3 Ultra (Tier 3 - Free Tier)"},
         ],
     }
 

@@ -1894,7 +1894,7 @@ function InngestObservabilityModal({
                         <div className="pl-7 space-y-1 text-[10px] font-mono text-slate-300 pt-1">
                           <div className="text-emerald-400">Tier 1: Google Gemini 2.5 Flash (Sub-second)</div>
                           <div className="text-indigo-400">Tier 2: Qwen 2.5 72B Instruct (Deep Reasoning)</div>
-                          <div className="text-amber-400">Tier 3: NVIDIA Nemotron 120B (High Capacity)</div>
+                          <div className="text-amber-400">Tier 3: NVIDIA Nemotron Ultra (High Capacity)</div>
                         </div>
                       </div>
                     </div>
@@ -2010,7 +2010,7 @@ function InngestObservabilityModal({
                   </div>
                   <div className="text-xs text-slate-300 space-y-1.5 pl-7 leading-relaxed">
                     <p>
-                      <strong className="text-white">Self-Healing Cascade:</strong> If Google Gemini 2.5 Flash encounters a rate limit or 503 error, the system automatically falls back to Qwen 2.5 72B Instruct, and subsequently to NVIDIA Nemotron 120B.
+                      <strong className="text-white">Self-Healing Cascade:</strong> If Google Gemini 2.5 Flash encounters a rate limit or 503 error, the system automatically falls back to Qwen 2.5 72B Instruct, and subsequently to NVIDIA Nemotron Ultra.
                     </p>
                     <p>
                       <strong className="text-white">Telemetry Inspection:</strong> Open the trace in the <strong>Live Traces & Logs</strong> tab. The <code className="text-blue-300">fallback_history</code> array logs the exact timestamp and error code for every transition.
@@ -3799,7 +3799,7 @@ export default function App() {
                     <option value="auto">Smart Automatic (High Speed & Precision)</option>
                     <option value="google/gemini-2.5-flash">High Speed Engine (Real-Time Responses)</option>
                     <option value="qwen/qwen-2.5-72b-instruct">Deep Analysis Engine (Complex Reasoning)</option>
-                    <option value="nvidia/nemotron-3-super-120b-a12b:free">High Capacity Engine (Comprehensive Synthesis)</option>
+                    <option value="nvidia/nemotron-3-ultra-550b-a55b:free">High Capacity Engine (NVIDIA Nemotron Ultra)</option>
                   </select>
                 </div>
 

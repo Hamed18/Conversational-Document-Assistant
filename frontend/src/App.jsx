@@ -67,7 +67,7 @@ const API_BASE = RAW_API_BASE.replace(/\/+$/, '');
 const UPLOAD_STAGES = [
   {
     step: 1,
-    title: 'Uploading PDF Document',
+    title: 'Uploading Document',
     desc: 'Transferring file bytes to secure ingestion server',
     icon: UploadCloud,
   },
@@ -80,7 +80,7 @@ const UPLOAD_STAGES = [
   {
     step: 3,
     title: 'Generating Dense Vector Embeddings',
-    desc: 'Running FastEmbed neural model for high-dimensional vectors',
+    desc: 'Running Google Gemini neural embedding model (3072-dim)',
     icon: Cpu,
   },
   {
@@ -2840,8 +2840,10 @@ export default function App() {
         ? (file.size / (1024 * 1024)).toFixed(1) + ' MB'
         : (file.size / 1024).toFixed(0) + ' KB';
 
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      toast.error('Only PDF documents are supported.', { id: 'file-type-err' });
+    const validExtensions = ['.pdf', '.docx', '.doc', '.txt', '.md'];
+    const isSupported = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
+    if (!isSupported) {
+      toast.error('Supported document types: PDF, Word (.docx, .doc), and Text (.txt).', { id: 'file-type-err' });
       setUploadProgress({
         active: true,
         filename: file.name,
@@ -2849,7 +2851,7 @@ export default function App() {
         stage: -1,
         percentage: 0,
         elapsedSeconds: 0,
-        errorMessage: 'Only PDF documents are supported.',
+        errorMessage: 'Supported document types: PDF, Word (.docx, .doc), and Text (.txt).',
       });
       return;
     }
@@ -3587,7 +3589,7 @@ export default function App() {
                   type="file"
                   ref={sidebarFileInputRef}
                   onChange={handleFileUpload}
-                  accept=".pdf"
+                  accept=".pdf,.docx,.doc,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
                   className="hidden"
                   id="sidebar-file-upload"
                 />
@@ -3600,7 +3602,7 @@ export default function App() {
                   }`}
                 >
                   {uploading ? <Loader2 size={14} className="animate-spin text-blue-400" /> : <Upload size={14} />}
-                  <span>{uploading ? 'Processing PDF...' : 'Upload PDF'}</span>
+                  <span>{uploading ? 'Processing Document...' : 'Upload Document'}</span>
                 </label>
 
                 {/* Sidebar Mini Progress Bar during Ingestion */}
@@ -4196,11 +4198,11 @@ export default function App() {
                       className="text-blue-400 hover:text-blue-300 font-medium cursor-pointer flex items-center gap-1 transition-colors"
                     >
                       <Upload size={12} />
-                      <span>Upload another PDF</span>
+                      <span>Upload another document</span>
                       <input
                         type="file"
                         onChange={handleFileUpload}
-                        accept=".pdf"
+                        accept=".pdf,.docx,.doc,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
                         className="hidden"
                         id="hero-file-upload-more"
                       />
@@ -4231,7 +4233,7 @@ export default function App() {
                     type="file"
                     ref={heroFileInputRef}
                     onChange={handleFileUpload}
-                    accept=".pdf"
+                    accept=".pdf,.docx,.doc,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
                     className="hidden"
                     id="hero-file-upload"
                   />
@@ -4240,10 +4242,10 @@ export default function App() {
                       <Upload size={20} />
                     </div>
                     <span className="text-sm font-semibold text-slate-200 mb-1">
-                      {uploading ? 'Processing & analyzing document...' : 'Click or drag & drop PDF here'}
+                      {uploading ? 'Processing & analyzing document...' : 'Click or drag & drop PDF or Word (.docx) here'}
                     </span>
                     <span className="text-[11px] text-slate-400">
-                      Upload documents to query with page and section citations
+                      Upload PDF or DOCX documents to query with page and section citations
                     </span>
                   </label>
                 </div>
@@ -4609,7 +4611,7 @@ export default function App() {
                 type="file"
                 ref={chatboxFileInputRef}
                 onChange={handleFileUpload}
-                accept=".pdf"
+                accept=".pdf,.docx,.doc,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
                 className="hidden"
                 id="chatbox-pdf-upload"
               />
@@ -4620,7 +4622,7 @@ export default function App() {
                     ? 'text-blue-400 bg-blue-500/10 animate-pulse'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
-                title="Attach and analyze PDF document"
+                title="Attach and analyze document (PDF, Word DOCX)"
               >
                 <Paperclip size={18} />
               </label>

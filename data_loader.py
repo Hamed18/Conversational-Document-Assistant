@@ -8,6 +8,16 @@ from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from dotenv import load_dotenv
 
+try:
+    import docx
+except ImportError:
+    docx = None
+
+try:
+    import docx2txt
+except ImportError:
+    docx2txt = None
+
 load_dotenv()
 logger = logging.getLogger("uvicorn")
 
@@ -96,6 +106,148 @@ def load_and_chunk_pdf_with_metadata(path: str) -> list[dict]:
 
 def load_and_chunk_pdf(path: str) -> list[str]:
     chunks_meta = load_and_chunk_pdf_with_metadata(path)
+    return [c["text"] for c in chunks_meta]
+
+
+def load_and_chunk_docx_with_metadata(path: str) -> list[dict]:
+    """
+    Loads a Word document (.docx / .doc), extracts structured paragraphs,
+    headings, and tables while preserving section provenance and estimating page breaks.
+    """
+    chunks_with_meta = []
+    current_section = ""
+    word_count = 0
+
+    if docx is not None:
+        try:
+            doc = docx.Document(path)
+
+            # 1. Process paragraphs
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if not text:
+                    continue
+
+                # Check if this paragraph is a styled heading or markdown/numbered heading
+                style_name = getattr(para.style, "name", "") or ""
+                if style_name.startswith("Heading") or style_name in ("Title", "Subtitle"):
+                    current_section = text
+                else:
+                    heading_candidate = extract_section_heading(text, current_section)
+                    if heading_candidate and heading_candidate != current_section:
+                        current_section = heading_candidate
+
+                # Word-count-based estimated page number (~350 words per standard printed page)
+                para_words = len(text.split())
+                word_count += para_words
+                page_num = str(max(1, (word_count // 350) + 1))
+
+                para_chunks = splitter.split_text(text)
+                for chunk in para_chunks:
+                    chunk_heading = extract_section_heading(chunk, current_section)
+                    chunks_with_meta.append({
+                        "text": chunk,
+                        "page": page_num,
+                        "section": chunk_heading or current_section or f"Section {page_num}",
+                    })
+
+            # 2. Process tables and format them as Markdown
+            for t_idx, table in enumerate(doc.tables):
+                table_lines = []
+                for row_idx, row in enumerate(table.rows):
+                    row_cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                    table_lines.append("| " + " | ".join(row_cells) + " |")
+                    # Insert markdown divider after header row
+                    if row_idx == 0:
+                        table_lines.append("| " + " | ".join(["---"] * len(row_cells)) + " |")
+
+                if table_lines:
+                    table_text = f"### Table {t_idx + 1} ({current_section or 'Data'})\n" + "\n".join(table_lines)
+                    page_num = str(max(1, (word_count // 350) + 1))
+                    chunks_with_meta.append({
+                        "text": table_text,
+                        "page": page_num,
+                        "section": current_section or f"Table {t_idx + 1}",
+                    })
+
+            if chunks_with_meta:
+                return chunks_with_meta
+        except Exception as docx_err:
+            logger.warning(f"[Loader] python-docx parsing failed on {path}: {docx_err}. Attempting docx2txt fallback...")
+
+    # Fallback to docx2txt for legacy or corrupted docx
+    if docx2txt is not None:
+        try:
+            raw_text = docx2txt.process(path)
+            if raw_text and raw_text.strip():
+                lines = raw_text.split("\n\n")
+                running_words = 0
+                sec = ""
+                for line in lines:
+                    cleaned = line.strip()
+                    if not cleaned:
+                        continue
+                    sec_cand = extract_section_heading(cleaned, sec)
+                    if sec_cand:
+                        sec = sec_cand
+                    running_words += len(cleaned.split())
+                    page_num = str(max(1, (running_words // 350) + 1))
+                    for chunk in splitter.split_text(cleaned):
+                        chunks_with_meta.append({
+                            "text": chunk,
+                            "page": page_num,
+                            "section": sec or f"Section {page_num}",
+                        })
+                return chunks_with_meta
+        except Exception as txt_err:
+            logger.error(f"[Loader] docx2txt fallback failed on {path}: {txt_err}")
+
+    return chunks_with_meta
+
+
+def load_and_chunk_txt_with_metadata(path: str) -> list[dict]:
+    """Loads plain text or Markdown files with line/heading tracking."""
+    chunks_with_meta = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if not content.strip():
+        return []
+
+    lines = content.split("\n\n")
+    running_words = 0
+    current_sec = ""
+    for line in lines:
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        sec_cand = extract_section_heading(cleaned, current_sec)
+        if sec_cand:
+            current_sec = sec_cand
+        running_words += len(cleaned.split())
+        page_num = str(max(1, (running_words // 350) + 1))
+        for chunk in splitter.split_text(cleaned):
+            chunks_with_meta.append({
+                "text": chunk,
+                "page": page_num,
+                "section": current_sec or f"Section {page_num}",
+            })
+    return chunks_with_meta
+
+
+def load_and_chunk_document_with_metadata(path: str) -> list[dict]:
+    """Dispatches to the optimal parser based on file extension (.pdf, .docx, .doc, .txt, .md)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".docx", ".doc"):
+        return load_and_chunk_docx_with_metadata(path)
+    elif ext in (".txt", ".md"):
+        return load_and_chunk_txt_with_metadata(path)
+    else:
+        return load_and_chunk_pdf_with_metadata(path)
+
+
+def load_and_chunk_document(path: str) -> list[str]:
+    chunks_meta = load_and_chunk_document_with_metadata(path)
     return [c["text"] for c in chunks_meta]
 
 

@@ -32,11 +32,20 @@ from auth import (
     verify_password,
 )
 from custom_types import RAGChunkAndSrc, RAGSearchResult, RAGUpsertResult
-from data_loader import embed_texts, load_and_chunk_pdf, load_and_chunk_pdf_with_metadata
+from data_loader import (
+    embed_texts,
+    load_and_chunk_pdf,
+    load_and_chunk_pdf_with_metadata,
+    load_and_chunk_document,
+    load_and_chunk_document_with_metadata,
+)
 from database import ChatHistory, GuestSession, User, UserProfile, get_db, init_db, SessionLocal
 from vector_db import QdrantStorage
 
 load_dotenv()
+
+# Allowed document formats across the platform (PDF, Word, Text)
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".md"}
 
 # -----------------------------------------------------------------------------
 # Configuration & Inngest Client
@@ -202,12 +211,12 @@ def get_fallback_models(requested_model: str | None = None) -> list[tuple[str, s
 
 
 # -----------------------------------------------------------------------------
-# Core RAG Ingestion Function (Tenant Partitioned)
+# Core RAG Ingestion Function (Tenant Partitioned, Multi-Format)
 # -----------------------------------------------------------------------------
-def process_and_ingest_pdf(pdf_path: str, source_id: str | None = None, owner_id: str | None = None) -> int:
-    source_id = source_id or Path(pdf_path).name
+def process_and_ingest_document(doc_path: str, source_id: str | None = None, owner_id: str | None = None) -> int:
+    source_id = source_id or Path(doc_path).name
     owner_id = owner_id or "system"
-    chunks_meta = load_and_chunk_pdf_with_metadata(pdf_path)
+    chunks_meta = load_and_chunk_document_with_metadata(doc_path)
     if not chunks_meta:
         return 0
 
@@ -228,6 +237,10 @@ def process_and_ingest_pdf(pdf_path: str, source_id: str | None = None, owner_id
     return len(chunks_meta)
 
 
+# Backward compatibility alias
+process_and_ingest_pdf = process_and_ingest_document
+
+
 # -----------------------------------------------------------------------------
 # Core Query & Multi-Tier Fallback Cascade Engine (Tenant Isolated & Memory-Aware)
 # -----------------------------------------------------------------------------
@@ -240,7 +253,10 @@ def execute_query_cascade(
     selected_sources: list[str] | None = None,
 ) -> dict:
     owner_dir = get_owner_storage_dir(owner_id)
-    available_files = [f.name for f in owner_dir.glob("*.pdf")]
+    available_files = [
+        f.name for f in owner_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS
+    ]
 
     intent = classify_user_intent(question)
 
@@ -267,7 +283,7 @@ def execute_query_cascade(
             }
         else:
             return {
-                "answer": "Hello! Welcome to **AskFiles AI**.\n\nPlease upload a PDF document using the sidebar or upload zone to get started. Once uploaded, I will index its content so you can ask questions, extract key findings, and verify assertions with interactive page citations.",
+                "answer": "Hello! Welcome to **AskFiles AI**.\n\nPlease upload a document (PDF, Word DOCX, or Text) using the sidebar or upload zone to get started. Once uploaded, I will index its content so you can ask questions, extract key findings, and verify assertions with interactive page and section citations.",
                 "sources": [],
                 "num_contexts": 0,
                 "model_used": "system (greeting router)",
@@ -275,7 +291,7 @@ def execute_query_cascade(
                 "fallback_history": [],
                 "context_chunks": [],
                 "suggested_followups": [
-                    "How do I upload a PDF?",
+                    "How do I upload a document?",
                     "What file formats are supported?",
                     "How does multi-tenant data privacy work?",
                 ],
@@ -325,7 +341,7 @@ def execute_query_cascade(
     if not found["contexts"]:
         if not available_files:
             return {
-                "answer": "You haven't uploaded any documents in this session yet. Please upload a PDF document first so I can analyze, summarize, or extract insights with citations for you.",
+                "answer": "You haven't uploaded any documents in this session yet. Please upload a document (PDF, Word DOCX, or Text) first so I can analyze, summarize, or extract insights with citations for you.",
                 "sources": [],
                 "num_contexts": 0,
                 "model_used": "system",
@@ -497,9 +513,9 @@ def execute_query_cascade(
 )
 async def rag_ingest_pdf(ctx: inngest.Context):
     def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
-        pdf_path = ctx.event.data["pdf_path"]
-        source_id = ctx.event.data.get("source_id", pdf_path)
-        chunks = load_and_chunk_pdf(pdf_path)
+        doc_path = ctx.event.data.get("doc_path") or ctx.event.data.get("pdf_path")
+        source_id = ctx.event.data.get("source_id", doc_path)
+        chunks = load_and_chunk_document(doc_path)
         return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
 
     def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
@@ -1210,8 +1226,12 @@ async def upload_document(
     file: UploadFile = File(...),
     identity: IdentityContext = Depends(get_security_context),
 ):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format '{file_ext}'. Supported formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
 
     owner_dir = get_owner_storage_dir(identity.id)
     file_path = owner_dir / file.filename
@@ -1221,7 +1241,7 @@ async def upload_document(
     try:
         # Ingest directly into Qdrant Cloud with strict owner_id tagging
         chunks_count = await asyncio.to_thread(
-            process_and_ingest_pdf,
+            process_and_ingest_document,
             str(file_path.resolve()),
             file.filename,
             identity.id,
@@ -1233,6 +1253,7 @@ async def upload_document(
                 inngest.Event(
                     name="rag/ingest_pdf",
                     data={
+                        "doc_path": str(file_path.resolve()),
                         "pdf_path": str(file_path.resolve()),
                         "source_id": file.filename,
                         "owner_id": identity.id,
@@ -1258,9 +1279,10 @@ def list_documents(identity: IdentityContext = Depends(get_security_context)):
     """Lists only the documents belonging to the requesting user or guest session."""
     owner_dir = get_owner_storage_dir(identity.id)
     docs = []
-    for f in owner_dir.glob("*.pdf"):
-        stat = f.stat()
-        docs.append(DocumentInfo(filename=f.name, size_bytes=stat.st_size, modified_at=stat.st_mtime))
+    for f in owner_dir.iterdir():
+        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
+            stat = f.stat()
+            docs.append(DocumentInfo(filename=f.name, size_bytes=stat.st_size, modified_at=stat.st_mtime))
     return sorted(docs, key=lambda d: d.modified_at, reverse=True)
 
 

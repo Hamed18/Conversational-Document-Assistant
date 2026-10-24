@@ -4656,7 +4656,7 @@ export default function App() {
             <p className="text-center text-[11px] text-slate-400 mt-2">
               Developed by{' '}
               <a
-                href="https://www.linkedin.com/in/devhamed/"
+                href="https://hamedhasan.vercel.app/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300 font-medium underline underline-offset-2 transition-colors"

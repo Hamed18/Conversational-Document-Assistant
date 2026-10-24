@@ -15,7 +15,7 @@ A resilient, production-grade Retrieval-Augmented Generation (RAG) system built 
 | **Vector Database Cluster** | **Qdrant Cloud** (AWS sa-east-1) | `https://c87eac77-a5d3-4754-bb7c-aa2e03abfc55.sa-east-1-0.aws.cloud.qdrant.io` |
 | **Workflow Observability** | **Inngest Cloud** | [https://app.inngest.com](https://app.inngest.com) |
 | **Source Code Repository** | **GitHub** | [https://github.com/Hamed18/Conversational-Document-Assistant](https://github.com/Hamed18/Conversational-Document-Assistant.git) |
-| **Lead Developer** | **LinkedIn** | [Mohammod Hamed Hasan](https://www.linkedin.com/in/devhamed/) |
+| **Lead Developer** | **Portfolio** | [Mohammod Hamed Hasan](https://hamedhasan.vercel.app/) |
 
 ---
 
@@ -108,5 +108,6 @@ npm run dev
 ## 👨‍💻 Author
 
 **Mohammod Hamed Hasan**  
+- **Portfolio**: [https://hamedhasan.vercel.app/](https://hamedhasan.vercel.app/)  
 - **LinkedIn**: [https://www.linkedin.com/in/devhamed/](https://www.linkedin.com/in/devhamed/)  
 - **GitHub**: [@Hamed18](https://github.com/Hamed18)

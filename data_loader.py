@@ -30,6 +30,10 @@ client = OpenAI(
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-large")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))
 
+# Google Gemini Free Tier Embeddings
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
+
 splitter = SentenceSplitter(chunk_size=1000, chunk_overlap=200)
 
 
@@ -132,8 +136,30 @@ def create_dynamic_batches(
     return batches
 
 
+def _embed_gemini_batch(batch: list[str]) -> list[list[float]]:
+    """Generates 3072-dim embeddings using Google Gemini's batchEmbedContents endpoint (Free Tier)."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/{GEMINI_EMBED_MODEL}:batchEmbedContents?key={GEMINI_API_KEY}"
+    requests_payload = [
+        {"model": GEMINI_EMBED_MODEL, "content": {"parts": [{"text": t}]}}
+        for t in batch
+    ]
+    resp = http_client.post(url, json={"requests": requests_payload})
+    resp.raise_for_status()
+    data = resp.json()
+    return [item["values"] for item in data["embeddings"]]
+
+
 def _embed_single_batch(batch: list[str]) -> list[list[float]]:
-    """Sends a single embedding request to the provider."""
+    """Sends a single embedding request to Gemini (or fallback provider)."""
+    if GEMINI_API_KEY:
+        try:
+            return _embed_gemini_batch(batch)
+        except Exception as gemini_err:
+            logger.warning(f"[Embeddings] Gemini batch embedding error: {gemini_err}. Attempting fallback...")
+            if not api_key:
+                raise gemini_err
+
+    # Fallback to OpenAI / OpenRouter client if Gemini is unavailable
     response = client.embeddings.create(
         model=EMBED_MODEL,
         input=batch,
